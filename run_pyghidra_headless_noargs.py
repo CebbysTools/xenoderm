@@ -2,6 +2,10 @@ import os
 import sys
 import traceback
 
+from pathlib import (
+    Path,
+)
+
 # Requires: pyghidra installed and a Ghidra installation available (GHIDRA_INSTALL_DIR or lastrun)
 # Behavior: no CLI arguments. Expects a file named "test.exe" in the current working directory.
 # Starts PyGhidra, opens/imports the sample, runs analysis, and prints assembly at entrypoint.
@@ -15,8 +19,8 @@ def main():
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    exe_path = os.path.join(os.getcwd(), "test.exe")
-    if not os.path.isfile(exe_path):
+    exe_path = Path(os.getcwd()) / "resources" / "test.exe"
+    if not exe_path.is_file():
         print(f"ERROR: test.exe not found in current directory: {os.getcwd()}", file=sys.stderr)
         sys.exit(2)
 

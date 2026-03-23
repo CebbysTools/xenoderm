@@ -2,6 +2,8 @@
 
 Xenoderm is a Python-based reverse engineering tool that takes Ghidra P-code as input and produces readable pseudo-code through an interactive UI. It is inspired by tools like JADX and Enigma, providing widget-driven workflows for symbol demangling, type restoration, and constant annotation.
 
+Large binaries can contain hundreds of thousands of functions; Xenoderm therefore uses a **batch/lazy loading model** — P-code is never exported for the whole binary at once. Instead a lightweight manifest is exported first, and P-code is fetched function-by-function or memory-range-by-range as the user navigates.
+
 ---
 
 ## High-Level Pipeline
@@ -14,31 +16,48 @@ Xenoderm is a Python-based reverse engineering tool that takes Ghidra P-code as 
                         ▼
 ┌────────────────────────────────────────────────────┐
 │  Ghidra (headless or GUI)                          │
-│  + xenoderm_export.py  (Ghidra script)             │
-│    • iterates all functions                        │
-│    • serialises P-code ops, symbols, types         │
-│    • writes  project.xdm  (JSON/gzip)              │
+│  + xenoderm_export.py                              │
+│                                                    │
+│  Step A — Manifest export  (runs once, fast)       │
+│    • binary meta, segments, symbols, types         │
+│    • function index (addr, name, size)             │
+│    • strings, cross-references                     │
+│    • writes  project.xdm  (no P-code yet)          │
+│                                                    │
+│  Step B — Shard export  (on demand, per batch)     │
+│    • triggered by Xenoderm for a range of addrs    │
+│    • exports P-code for that range only            │
+│    • writes  project.xdm.shard/<range>.xds         │
 └───────────────────────┬────────────────────────────┘
-                        │  project.xdm
+                        │  project.xdm + shards/
                         ▼
 ┌────────────────────────────────────────────────────┐
 │  Xenoderm  (this tool)                             │
+│                                                    │
 │  ┌──────────────────────────────────────────────┐  │
-│  │  Importer / Parser                           │  │
-│  │  builds in-memory XDM model                  │  │
+│  │  Manifest Loader                             │  │
+│  │  loads index — instant startup               │  │
 │  └─────────────────┬────────────────────────────┘  │
 │                    │                               │
 │  ┌─────────────────▼────────────────────────────┐  │
-│  │  Analysis Pipeline                           │  │
+│  │  Batch Loader  (lazy, on demand)             │  │
+│  │  • triggered by UI navigation or API call    │  │
+│  │  • requests shard for function / range       │  │
+│  │  • merges shard into live Binary model       │  │
+│  └─────────────────┬────────────────────────────┘  │
+│                    │                               │
+│  ┌─────────────────▼────────────────────────────┐  │
+│  │  Analysis Pipeline  (per loaded batch)       │  │
+│  │   • block splitting → directed CFG           │  │
+│  │   • instruction reordering                   │  │
+│  │   • offset recalculation                     │  │
 │  │   • symbol recovery & demangling             │  │
 │  │   • type propagation                         │  │
 │  │   • constant folding / string recovery       │  │
-│  │   • control-flow structuring                 │  │
-│  │   • data-flow / SSA                          │  │
 │  └─────────────────┬────────────────────────────┘  │
 │                    │                               │
 │  ┌─────────────────▼────────────────────────────┐  │
-│  │  Decompiler Engine                           │  │
+│  │  Decompiler Engine  (per function)           │  │
 │  │   • P-code → high-level IR                  │  │
 │  │   • expression recovery                      │  │
 │  │   • statement lifting                        │  │
@@ -48,7 +67,7 @@ Xenoderm is a Python-based reverse engineering tool that takes Ghidra P-code as 
 │  ┌─────────────────▼────────────────────────────┐  │
 │  │  UI Layer  (Qt / PySide6)                    │  │
 │  │   • function browser                         │  │
-│  │   • P-code view (raw)                        │  │
+│  │   • P-code view (raw + reordered)            │  │
 │  │   • pseudo-code view                         │  │
 │  │   • symbol/type editor widgets               │  │
 │  │   • cross-reference panel                    │  │
@@ -65,10 +84,11 @@ Xenoderm is a Python-based reverse engineering tool that takes Ghidra P-code as 
 
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
-| Ghidra Exporter | `ghidra/xenoderm_export.py` | Dumps P-code, symbols, types from Ghidra into `.xdm` |
-| XDM Model | `xenoderm/model/` | In-memory representation of the binary's data |
-| Importer | `xenoderm/importer.py` | Deserialises `.xdm` into the XDM model |
-| Analysis Pipeline | `xenoderm/analysis/` | Transforms and enriches the XDM model |
+| Ghidra Exporter | `ghidra/xenoderm_export.py` | Manifest export + on-demand shard export by address range |
+| Manifest Loader | `xenoderm/loader/manifest.py` | Deserialises `.xdm` manifest (no P-code) into Binary skeleton |
+| Batch Loader | `xenoderm/loader/batch.py` | Requests and merges `.xds` shards into the live Binary model |
+| XDM Model | `xenoderm/model/` | In-memory representation of all loaded data |
+| Analysis Pipeline | `xenoderm/analysis/` | Transforms and enriches a loaded batch |
 | Decompiler Engine | `xenoderm/decompiler/` | Converts enriched P-code into pseudo-code AST |
 | Pseudo-code Emitter | `xenoderm/emitter/` | Renders the AST as formatted Python-like text |
 | UI | `xenoderm/ui/` | PySide6 widgets for browsing and editing |
@@ -78,57 +98,94 @@ Xenoderm is a Python-based reverse engineering tool that takes Ghidra P-code as 
 
 ## Data Flow Detail
 
-### Phase 1 — Export (Ghidra)
+### Phase 1 — Manifest Export (Ghidra, once)
 
-The Ghidra script runs in headless or GUI mode and produces a single `.xdm` file — a gzip-compressed JSON document. It captures:
+The Ghidra script exports a manifest `.xdm` file in seconds, regardless of binary size:
 
 - **Binary metadata**: architecture, endianness, address size, compiler hints
 - **Segments / sections**: name, start, end, permissions
 - **Symbols table**: address → (raw name, demangled name, kind)
 - **Type system snapshot**: structs, enums, typedefs, function signatures
-- **Functions**: address, name, calling convention
-  - **Basic blocks**: start address, list of P-code ops
-  - **P-code ops**: opcode, inputs (varnodes), output (varnode)
+- **Function index**: address, name, calling convention, byte size — **no P-code**
 - **Strings**: address → UTF-8 / UTF-16 value
 - **Cross-references**: caller → callee edges
 
-### Phase 2 — Import & Model Construction
+### Phase 2 — Manifest Load (Xenoderm)
 
-`xenoderm/importer.py` deserialises the `.xdm` JSON into typed Python dataclasses (`xenoderm/model/`). The model mirrors the export schema exactly and is the single source of truth for all downstream phases.
+`xenoderm/loader/manifest.py` deserialises the `.xdm` manifest into a `Binary` model with fully-populated metadata and an empty `functions[addr].blocks = {}` skeleton for every function. The UI can render the function list immediately.
 
-### Phase 3 — Analysis Passes
+### Phase 3 — On-Demand Shard Load (batch)
 
-Each analysis pass reads from and writes back to the XDM model. Passes are ordered and may depend on each other (declared via a simple dependency graph). Users can enable or disable passes.
+When the user navigates to a function (or a memory range is requested programmatically):
 
-### Phase 4 — Decompilation
+1. The **Batch Loader** resolves which functions fall in the requested range.
+2. It checks whether a cached shard file already exists in `project.xdm.shard/`.
+3. If not, it invokes the Ghidra exporter in headless mode for that specific range, producing a `.xds` (shard) file containing only those functions' P-code.
+4. The shard is deserialised and merged into the live `Binary.functions` map.
 
-The decompiler consumes the analysis-enriched XDM model and produces a function-level **pseudo-code AST**. It does not re-run analysis; it only translates the already-structured information into an AST, which the emitter then renders to text.
+See `docs/architecture/batch-loading.md` for full design.
 
-### Phase 5 — UI Interaction
+### Phase 4 — Analysis Passes (per batch)
 
-All UI mutations (renaming a symbol, annotating a type, marking a constant) write directly into the XDM model's **user-annotations overlay**. Re-running the decompiler on a function after an annotation immediately reflects the change.
+Passes run over the newly-loaded functions in the batch. The first three passes are always required and run in order before any other pass:
+
+1. **BlockSplitPass** — splits raw P-code into basic blocks and builds the directed CFG with typed edges (unconditional, conditional, call, fall-through).
+2. **InsnReorderPass** — reverses compiler instruction scheduling; groups data-dependent instructions back into sequential chains.
+3. **OffsetRecalcPass** — detects baked-in pointer offsets and rewrites accesses to use a canonical base + non-negative offset form.
+
+Subsequent passes (type recovery, symbol recovery, constant folding, etc.) operate on the normalised, reordered CFG.
+
+### Phase 5 — Decompilation (per function)
+
+The decompiler consumes the analysis-enriched XDM model for a single function and produces a **pseudo-code AST**. It does not re-run analysis; it only translates the already-structured information, which the emitter renders to text.
+
+### Phase 6 — UI Interaction
+
+All UI mutations (renaming a symbol, annotating a type, marking a constant) write into the XDM model's **user-annotations overlay**. Re-running the decompiler on a function after an annotation immediately reflects the change without re-loading or re-analysing.
 
 ---
 
-## File Format: `.xdm`
+## File Format: `.xdm` and `.xds`
 
-`.xdm` stands for *Xenoderm Model*. It is a **gzip-compressed JSON** file with the following top-level schema:
+### `.xdm` — Xenoderm Model (manifest)
+
+`.xdm` is a **gzip-compressed JSON** file. It is the project file — always present and always small.
 
 ```json
 {
   "version": 1,
-  "meta": { ... },
-  "segments": [ ... ],
-  "symbols": [ ... ],
-  "types": [ ... ],
-  "functions": [ ... ],
-  "strings": [ ... ],
-  "xrefs": [ ... ],
-  "annotations": { ... }
+  "meta":       { ... },
+  "segments":   [ ... ],
+  "symbols":    [ ... ],
+  "types":      [ ... ],
+  "functions":  [ { "addr": "0x401234", "name": "...", "cc": "...", "size": 128 } ],
+  "strings":    [ ... ],
+  "xrefs":      [ ... ],
+  "annotations":{ ... },
+  "shards":     { "0x401000-0x402000": "shards/0x401000-0x402000.xds" }
 }
 ```
 
-The `annotations` key is the only section written by Xenoderm itself; all other sections are produced by the Ghidra exporter and treated as read-only by the tool (though the model allows overlay overrides).
+The `functions` array in the manifest contains **no `blocks` field** — only the index metadata. The `shards` map records which ranges have already been exported.
+
+### `.xds` — Xenoderm Shard
+
+A shard is a lightweight gzip-compressed JSON fragment containing P-code for one batch of functions.
+
+```json
+{
+  "version": 1,
+  "range":  { "start": "0x401000", "end": "0x402000" },
+  "functions": [
+    {
+      "addr":   "0x401234",
+      "blocks": [ { "start": "...", "end": "...", "ops": [ ... ] } ]
+    }
+  ]
+}
+```
+
+Shards are stored alongside the `.xdm` in `<project>.xdm.shards/` and referenced from the manifest's `shards` map so they are never re-exported unnecessarily.
 
 ---
 
@@ -147,8 +204,10 @@ The `annotations` key is the only section written by Xenoderm itself; all other 
 
 ## Key Design Principles
 
-1. **Separation of concerns** — the exporter, model, analysis, decompiler, and UI are strictly layered; no layer calls upward.
-2. **Incremental re-decompilation** — changing an annotation triggers re-decompilation only for the affected function, not the whole binary.
-3. **Non-destructive annotations** — the original P-code export is never modified; all user changes live in the `annotations` overlay.
-4. **Plugin-friendly analysis** — analysis passes are registered via entry-points, making it easy to add passes without modifying core code.
-5. **Headless mode** — every component except the UI can run without a display, enabling scripted batch decompilation.
+1. **Separation of concerns** — exporter, loader, analysis, decompiler, and UI are strictly layered; no layer calls upward.
+2. **Lazy / batch loading** — P-code is loaded only for the functions the user is actively working on; startup is instant regardless of binary size.
+3. **Three-pass normalisation** — every loaded batch passes through block-split → instruction-reorder → offset-recalc before any other analysis, giving all downstream passes a canonical, architecture-independent view of the code.
+4. **Incremental re-decompilation** — changing an annotation triggers re-decompilation only for the affected function.
+5. **Non-destructive annotations** — the original P-code is never modified; all user changes live in the `annotations` overlay.
+6. **Plugin-friendly analysis** — analysis passes are registered via entry-points, making it easy to add passes without modifying core code.
+7. **Headless mode** — every component except the UI can run without a display, enabling scripted batch decompilation.

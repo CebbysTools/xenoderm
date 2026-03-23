@@ -51,10 +51,13 @@ def main() -> None:
             release = find_release(releases, version)
             asset = find_zip_asset(release)
             
-            out_dir = Path(get_string("OUTPUT_DIR", default="./.tools")).resolve() / "ghidra"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            path = download_asset(session, asset, out_dir)
+            ghidra_home = Path(get_string("OUTPUT_DIR", default="./.tools")).resolve() / "ghidra"
+            ghidra_home.mkdir(parents=True, exist_ok=True)
+            path = download_asset(session, asset, ghidra_home)
             unzip_asset(path)
+            append_outputs(
+                ghidra_home=ghidra_home,
+            )
     except BaseException as e:
         raise BaseException(f"Error in setup-ghidra action") from e
 
@@ -192,6 +195,11 @@ def get_log_level() -> int:
     if isinstance(level, int):
         return level
     raise ValueError(f"Environment variable '{key}' value '{s}' is not a valid log level")
+
+def append_outputs(**kwargs: Any) -> None:
+    with open(get_string(f"GITHUB_OUTPUT"), "a") as file:
+        for k, v in kwargs.items():
+            file.write(f"{k.replace(".", "_").upper()}={v}\n")
 
 if __name__ == '__main__':
     main()

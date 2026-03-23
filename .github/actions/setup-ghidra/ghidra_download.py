@@ -22,6 +22,9 @@ from pathlib import (
 from zipfile import (
     ZipFile,
 )
+from shutil import (
+    move,
+)
 from typing import (
     List,
     Dict,
@@ -48,7 +51,7 @@ def main() -> None:
             release = find_release(releases, version)
             asset = find_zip_asset(release)
             
-            out_dir = Path(get_string("OUTPUT_DIR", default=".")).resolve()
+            out_dir = Path(get_string("OUTPUT_DIR", default="./tools")).resolve()
             out_dir.mkdir(parents=True, exist_ok=True)
             path = download_asset(session, asset, out_dir)
             unzip_asset(path)
@@ -63,16 +66,21 @@ def unzip_asset(asset: Path):
             with ZipFile(asset, 'r') as zip_ref:
                 zip_ref.extractall(tmpdir)
                 logging.debug(f"Extracted zip asset to temporary directory {tmpdir}")
-                items = [i for i in tmpdir.iterdir()]
-                if len(items) != 1:
-                    raise ValueError(f"Expected exactly one item in the zip archive, found {len(items)} items {[str(i) for i in items]}")
-                item = items[0]
-                if item.is_dir():
-                    item.rename(parent)
-                    asset.unlink()
+            
+            items = [i for i in tmpdir.iterdir()]
+            if len(items) != 1:
+                raise ValueError(f"Expected exactly one item in the zip archive, found {len(items)} items {[str(i) for i in items]}")
+            item = items[0]
+            if not item.is_dir():
+                raise ValueError(f"Expected a single directory in the zip archive, found a file {item}")
+            
+            for sub_item in item.iterdir():
+                dest_path = parent / sub_item.name
+                move(sub_item, dest_path)
                     
+        asset.unlink()
         if get_log_level() <= logging.DEBUG:
-            logging.debug(f"Directory '{asset}' contents")
+            logging.debug(f"Directory {asset.resolve()} contents")
             for i in parent.iterdir():
                 logging.debug(str(i))
     except BaseException as e:

@@ -30,22 +30,25 @@ from os import (
 )
 
 
-def get_releases(session: requests.Session, repo: str) -> List[Dict[str, Any]]:
-    url = f"https://api.github.com/repos/{repo}/releases"
-    resp = session.get(url)
-    resp.raise_for_status()
-    return resp.json()
 
 
-def find_release(releases: List[Dict[str, Any]], version: str) -> Optional[Dict[str, Any]]:
-    v = version.strip()
-    # Prefer exact tag match, then name or substring
-    for r in releases:
-        tag = (r.get("tag_name") or "")
-        name = (r.get("name") or "")
-        if tag.lstrip("v") == v or tag == v or v in tag or v in name or name.lstrip("v") == v:
-            return r
-    return None
+def find_release(releases: List[Dict[str, Any]], version: str) -> Dict[str, Any]:
+    try:
+        length = len(releases)
+        if length == 0:
+            raise ValueError("No releases to be filtered")
+        
+        if version.lower() == "latest":
+            return releases[0]
+        
+        version = f"Ghidra {version}"
+        for r in releases:
+            name = (r.get("name") or "")
+            if name == version:
+                return r
+        raise ValueError(f"No release matching name '{version}' found")
+    except BaseException as e:
+        raise BaseException("Failed to find release") from e
 
 
 def download_asset(session: requests.Session, asset: Dict[str, Any], out_dir: str) -> str:
@@ -63,7 +66,7 @@ def download_asset(session: requests.Session, asset: Dict[str, Any], out_dir: st
 
 def main() -> None:
     logging.basicConfig(
-        level=get_log_level("LOG_LEVEL", default=logging.INFO),
+        level=get_log_level(),
         format="[%(levelname)s] %(message)s"
     )
 
@@ -71,19 +74,7 @@ def main() -> None:
         version = get_string("GHIDRA_VERSION")
         out_dir = get_string("OUTPUT_DIR", default=".")
         with open_session() as session:
-            logging.info("Querying for Ghidra releases")
-            try:
-                releases: List[Dict[str, Any]] = get_releases(session, "NationalSecurityAgency/ghidra")
-            except Exception as e:
-                logging.error("Failed to fetch releases: %s", e)
-                sys.exit(1)
-            
-            logging.debug("Fetched %d releases", len(releases))
-            i = 0
-            for r in releases:
-                logging.debug(f"{i}. Release: {dumps(r)}", )    
-                i += 1
-            
+            releases = get_all_releases(session)
             release: Optional[Dict[str, Any]] = find_release(releases, version)
             if not release:
                 logging.error("No release matching version '%s' found in NationalSecurityAgency/ghidra", version)
@@ -114,7 +105,26 @@ def main() -> None:
             logging.info("Downloaded to %s", path)
     except BaseException as e:
         raise BaseException(f"Error in setup-ghidra action") from e
-    
+
+
+def get_all_releases(session: requests.Session) -> List[Dict[str, Any]]:
+    logging.info("Querying for Ghidra releases")
+    try:
+        url = f"https://api.github.com/repos/NationalSecurityAgency/ghidra/releases"
+        resp = session.get(url)
+        resp.raise_for_status()
+        out = resp.json()
+        try:
+            if get_log_level() <= logging.DEBUG:
+                logging.debug("Query for releases found %d releases", len(out))
+                for i in range(len(out)):
+                    logging.debug(f"{i}. Release: {dumps(out[i])}")
+        except: pass #fmt: off #fmt: on
+        return out
+
+    except BaseException as e:
+        raise BaseException("Failed to fetch releases from GitHub API") from e
+        
 
 def open_session():
     try:
@@ -147,10 +157,11 @@ def get_int(key:str, *, default: int|None = None) -> int:
     except ValueError as e:
         raise ValueError(f"Environment variable '{key}' value '{s}' cannot be converted to int") from e
     
-def get_log_level(key:str, *, default: int = logging.INFO) -> int:
+def get_log_level() -> int:
+    key = "LOG_LEVEL"
     s = get_string(key, default="default")
     if s.lower() == "default":
-        return default
+        return logging.INFO
     level = getattr(logging, s.upper(), None)
     if isinstance(level, int):
         return level

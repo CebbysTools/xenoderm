@@ -61,6 +61,7 @@ runs:
       env:
         GHIDRA_VERSION: ${{ inputs.ghidra-version }}
         GITHUB_TOKEN: ${{ github.token }}
+        LOG_LEVEL: "DEBUG"
       run: python ${{ github.action_path }}/ghidra_download.py
       # env:
       #   INPUT_VERSION: ${{ inputs.version }}

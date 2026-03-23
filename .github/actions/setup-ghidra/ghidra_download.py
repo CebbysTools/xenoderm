@@ -22,6 +22,9 @@ from typing import (
     Dict,
     Any,
 )
+from json import (
+    dumps,
+)
 from os import (
     environ as ENVIRONMENT,
 )
@@ -68,12 +71,19 @@ def main() -> None:
         version = get_string("GHIDRA_VERSION")
         out_dir = get_string("OUTPUT_DIR", default=".")
         with open_session() as session:
-            logging.info("Querying releases for NationalSecurityAgency/ghidra")
+            logging.info("Querying for Ghidra releases")
             try:
                 releases: List[Dict[str, Any]] = get_releases(session, "NationalSecurityAgency/ghidra")
             except Exception as e:
                 logging.error("Failed to fetch releases: %s", e)
                 sys.exit(1)
+            
+            logging.debug("Fetched %d releases", len(releases))
+            i = 0
+            for r in releases:
+                logging.debug(f"{i}. Release: {dumps(r)}", )    
+                i += 1
+            
             release: Optional[Dict[str, Any]] = find_release(releases, version)
             if not release:
                 logging.error("No release matching version '%s' found in NationalSecurityAgency/ghidra", version)

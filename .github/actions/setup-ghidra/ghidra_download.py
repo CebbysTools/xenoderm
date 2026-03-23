@@ -10,14 +10,19 @@ Environment variables:
 """
 import requests
 import logging
-import sys
-import os
-
 from requests import (
     Session,
 )
+from tempfile import (
+    TemporaryDirectory,
+)
+from pathlib import (
+    Path,
+)
+from zipfile import (
+    ZipFile,
+)
 from typing import (
-    Optional,
     List,
     Dict,
     Any,
@@ -30,6 +35,65 @@ from os import (
 )
 
 
+def main() -> None:
+    logging.basicConfig(
+        level=get_log_level(),
+        format="[%(levelname)s] %(message)s"
+    )
+
+    try:
+        version = get_string("GHIDRA_VERSION")
+        with open_session() as session:
+            releases = get_all_releases(session)
+            release = find_release(releases, version)
+            asset = find_zip_asset(release)
+            
+            out_dir = Path(get_string("OUTPUT_DIR", default=".")).resolve()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = download_asset(session, asset, out_dir)
+            unzip_asset(path)
+    except BaseException as e:
+        raise BaseException(f"Error in setup-ghidra action") from e
+
+def unzip_asset(asset: Path):
+    try:
+        parent = asset.parent
+        with TemporaryDirectory(prefix="ghidra-unzip-", dir=parent) as tmpdir:
+            tmpdir = Path(tmpdir)
+            with ZipFile(asset, 'r') as zip_ref:
+                zip_ref.extractall(tmpdir)
+                logging.debug(f"Extracted zip asset to temporary directory {tmpdir}")
+                for item in tmpdir.iterdir():
+                    logging.debug(str(item))
+    except BaseException as e:
+        raise BaseException("Failed to unzip asset") from e
+
+def find_zip_asset(release: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        for a in release.get("assets", []):
+            name = (a.get("name") or "").lower()
+            if name.endswith('.zip') or '.zip' in name:
+                return a
+        raise ValueError(f"No zip asset found in release {release.get('name')}")
+    except BaseException as e:
+        raise BaseException("Failed to find zip asset in release") from e
+
+def download_asset(session: requests.Session, asset: Dict[str, Any], out_dir: Path) -> Path:
+    logging.info("Downloading asset %s", asset.get("name"))
+    try:
+        url = asset.get("browser_download_url")
+        if not url:
+            raise ValueError("Asset is missing 'browser_download_url'")
+        
+        out_path = out_dir / "ghidra.zip"
+        with session.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(out_path, "wb") as f:    
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk: f.write(chunk)
+        return Path(out_path)
+    except BaseException as e:
+        raise BaseException("Failed to download asset") from e
 
 
 def find_release(releases: List[Dict[str, Any]], version: str) -> Dict[str, Any]:
@@ -49,62 +113,6 @@ def find_release(releases: List[Dict[str, Any]], version: str) -> Dict[str, Any]
         raise ValueError(f"No release matching name '{version}' found")
     except BaseException as e:
         raise BaseException("Failed to find release") from e
-
-
-def download_asset(session: requests.Session, asset: Dict[str, Any], out_dir: str) -> str:
-    url = asset.get("browser_download_url")
-    filename = asset.get("name")
-    out_path = os.path.join(out_dir, filename)
-    with session.get(url, stream=True) as r:
-        r.raise_for_status()
-        with open(out_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-    return out_path
-
-
-def main() -> None:
-    logging.basicConfig(
-        level=get_log_level(),
-        format="[%(levelname)s] %(message)s"
-    )
-
-    try:
-        version = get_string("GHIDRA_VERSION")
-        out_dir = get_string("OUTPUT_DIR", default=".")
-        with open_session() as session:
-            releases = get_all_releases(session)
-            release: Optional[Dict[str, Any]] = find_release(releases, version)
-            if not release:
-                logging.error("No release matching version '%s' found in NationalSecurityAgency/ghidra", version)
-                sys.exit(3)
-
-            logging.info("Found release: %s", release.get("tag_name"))
-
-            # find a zip asset
-            asset: Optional[Dict[str, Any]] = None
-            for a in release.get("assets", []):
-                name = (a.get("name") or "").lower()
-                if name.endswith('.zip') or '.zip' in name:
-                    asset = a
-                    break
-
-            if not asset:
-                logging.error("No zip asset found in release %s", release.get("tag_name"))
-                sys.exit(4)
-
-            logging.info("Downloading asset %s", asset.get("name"))
-            os.makedirs(out_dir, exist_ok=True)
-            try:
-                path = download_asset(session, asset, out_dir)
-            except Exception as e:
-                logging.error("Download failed: %s", e)
-                sys.exit(5)
-
-            logging.info("Downloaded to %s", path)
-    except BaseException as e:
-        raise BaseException(f"Error in setup-ghidra action") from e
 
 
 def get_all_releases(session: requests.Session) -> List[Dict[str, Any]]:

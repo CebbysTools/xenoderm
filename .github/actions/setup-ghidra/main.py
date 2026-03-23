@@ -50,14 +50,19 @@ def main() -> None:
             releases = get_all_releases(session)
             release = find_release(releases, version)
             asset = find_zip_asset(release)
+            version = release.get("name")
+            if not version:
+                raise ValueError("Release is missing 'name' field")
+            version = version.replace("Ghidra ", "")
             
-            ghidra_home = Path(get_string("OUTPUT_DIR", default="./.tools")).resolve() / "ghidra"
+            ghidra_home = Path(get_string("GHIDRA_PATH", default="./.tools/ghidra")).resolve()
             ghidra_home.mkdir(parents=True, exist_ok=True)
             path = download_asset(session, asset, ghidra_home)
             unzip_asset(path)
-            append_outputs(
-                ghidra_home=ghidra_home.resolve()
-            )
+            append_outputs( {
+                "ghidra-version": version,
+                "ghidra-home": ghidra_home.resolve()
+            })
     except BaseException as e:
         raise BaseException(f"Error in setup-ghidra action") from e
 
@@ -196,16 +201,15 @@ def get_log_level() -> int:
         return level
     raise ValueError(f"Environment variable '{key}' value '{s}' is not a valid log level")
 
-def append_outputs(**kwargs: Any) -> None:
+def append_outputs(args: dict[str, Any]) -> None:
     outputs = Path(get_string(f"GITHUB_OUTPUT")).resolve()
     logging.debug(f"Appending outputs to GITHUB_OUTPUT file '{outputs}'")
     try:
         with open(outputs, "a") as file:
-            for k, v in kwargs.items():
-                key = k.replace(".", "_").upper()
+            for k, v in args.items():
                 value = str(v).replace("\n", "%0A").replace("\r", "%0D")
-                logging.debug(f"Appending output '{key}'='{value}'")
-                file.write(f"{key}={value}\n")
+                logging.debug(f"Appending output '{k}'='{value}'")
+                file.write(f"{k}={value}\n")
     except BaseException as e:
         raise BaseException("Failed to append outputs") from e
 

@@ -138,7 +138,9 @@ def get_int(key:str, *, default: int|None = None) -> int:
         raise ValueError(f"Environment variable '{key}' value '{s}' cannot be converted to int") from e
     
 def get_log_level(key:str, *, default: int = logging.INFO) -> int:
-    s = get_string(key, default=str(default))
+    s = get_string(key, default="default")
+    if s.lower() == "default":
+        return default
     level = getattr(logging, s.upper(), None)
     if isinstance(level, int):
         return level

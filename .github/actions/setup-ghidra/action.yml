@@ -1,0 +1,217 @@
+name: 'Setup Ghidra'
+description: >
+  Download, cache, and configure Ghidra + the required JDK.
+  Sets GHIDRA_HOME and GHIDRA_HEADLESS environment variables.
+
+inputs:
+  version:
+    description: >
+      Ghidra version to install (e.g. "11.1.2") or "latest" to resolve
+      automatically via the GitHub Releases API.
+    required: false
+    default: 'latest'
+
+  java-distribution:
+    description: >
+      JDK distribution passed to actions/setup-java.
+      Ghidra 11.x requires Java 17; Ghidra 10.x requires Java 11.
+    required: false
+    default: 'temurin'
+
+  install-path:
+    description: >
+      Directory where Ghidra will be installed.
+      Defaults to $RUNNER_TOOL_CACHE/ghidra.
+    required: false
+    default: ''
+
+  cache:
+    description: >
+      Whether to cache the Ghidra installation between runs.
+    required: false
+    default: 'true'
+
+outputs:
+  ghidra-home:
+    description: 'Absolute path to the Ghidra installation directory.'
+    value: ${{ steps.resolve.outputs.ghidra-home }}
+
+  ghidra-version:
+    description: 'Resolved Ghidra version string, e.g. "11.1.2".'
+    value: ${{ steps.resolve.outputs.version }}
+
+  cache-hit:
+    description: '"true" if Ghidra was restored from the runner cache.'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+
+    # ------------------------------------------------------------------
+    # 1. Resolve version and compute paths
+    # ------------------------------------------------------------------
+    - name: Resolve version and paths
+      id: resolve
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_INSTALL_PATH: ${{ inputs.install-path }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        # ---- Resolve version ----------------------------------------
+        if [ "$INPUT_VERSION" = "latest" ]; then
+          echo "Querying latest Ghidra release via GitHub API..."
+          VERSION=$(gh release view \
+            --repo NationalSecurityAgency/ghidra \
+            --json tagName \
+            --jq '.tagName | ltrimstr("Ghidra_") | rtrimstr("_build")')
+        else
+          VERSION="$INPUT_VERSION"
+        fi
+        echo "Resolved Ghidra version: $VERSION"
+
+        # ---- Determine Java version required ------------------------
+        MAJOR=$(echo "$VERSION" | cut -d. -f1)
+        if [ "$MAJOR" -ge 11 ]; then
+          JAVA_VERSION="17"
+        else
+          JAVA_VERSION="11"
+        fi
+
+        # ---- Compute install path -----------------------------------
+        if [ -n "$INPUT_INSTALL_PATH" ]; then
+          INSTALL_DIR="$INPUT_INSTALL_PATH"
+        else
+          INSTALL_DIR="${RUNNER_TOOL_CACHE}/ghidra/${VERSION}"
+        fi
+
+        # ---- Build download URL from release asset name -------------
+        # Official release asset name pattern:
+        #   ghidra_<version>_PUBLIC_<date>.zip
+        # We query the release assets to find the actual zip name.
+        ASSET_NAME=$(gh release view \
+          "Ghidra_${VERSION}_build" \
+          --repo NationalSecurityAgency/ghidra \
+          --json assets \
+          --jq '.assets[] | select(.name | endswith(".zip")) | .name')
+
+        DOWNLOAD_URL="https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${VERSION}_build/${ASSET_NAME}"
+
+        # ---- Compute headless path (OS-aware) -----------------------
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          GHIDRA_HEADLESS="${INSTALL_DIR}/ghidra_${VERSION}_PUBLIC/support/analyzeHeadless.bat"
+        else
+          GHIDRA_HEADLESS="${INSTALL_DIR}/ghidra_${VERSION}_PUBLIC/support/analyzeHeadless"
+        fi
+        GHIDRA_HOME="${INSTALL_DIR}/ghidra_${VERSION}_PUBLIC"
+
+        # ---- Export outputs -----------------------------------------
+        echo "version=${VERSION}"           >> "$GITHUB_OUTPUT"
+        echo "java-version=${JAVA_VERSION}" >> "$GITHUB_OUTPUT"
+        echo "install-dir=${INSTALL_DIR}"   >> "$GITHUB_OUTPUT"
+        echo "asset-name=${ASSET_NAME}"     >> "$GITHUB_OUTPUT"
+        echo "download-url=${DOWNLOAD_URL}" >> "$GITHUB_OUTPUT"
+        echo "ghidra-home=${GHIDRA_HOME}"   >> "$GITHUB_OUTPUT"
+        echo "ghidra-headless=${GHIDRA_HEADLESS}" >> "$GITHUB_OUTPUT"
+
+    # ------------------------------------------------------------------
+    # 2. Install the required JDK
+    # ------------------------------------------------------------------
+    - name: Setup Java ${{ steps.resolve.outputs.java-version }}
+      uses: actions/setup-java@3a4f6e1af504cf6d3242b5d1f1814b26b454b7ae  # v4.7.0
+      with:
+        distribution: ${{ inputs.java-distribution }}
+        java-version: ${{ steps.resolve.outputs.java-version }}
+
+    # ------------------------------------------------------------------
+    # 3. Restore Ghidra from cache (if enabled)
+    # ------------------------------------------------------------------
+    - name: Restore Ghidra from cache
+      id: cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684   # v4.2.3
+      with:
+        path: ${{ steps.resolve.outputs.install-dir }}
+        key: ghidra-${{ steps.resolve.outputs.version }}-${{ runner.os }}
+
+    # ------------------------------------------------------------------
+    # 4. Download and install Ghidra (only on cache miss)
+    # ------------------------------------------------------------------
+    - name: Download Ghidra ${{ steps.resolve.outputs.version }}
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        DOWNLOAD_URL: ${{ steps.resolve.outputs.download-url }}
+        ASSET_NAME: ${{ steps.resolve.outputs.asset-name }}
+        VERSION: ${{ steps.resolve.outputs.version }}
+        INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        mkdir -p "$INSTALL_DIR"
+        ZIP_PATH="${INSTALL_DIR}/${ASSET_NAME}"
+
+        echo "Downloading ${DOWNLOAD_URL}..."
+        curl -fsSL -o "$ZIP_PATH" "$DOWNLOAD_URL"
+
+        # ---- Verify SHA-256 against published hash ------------------
+        echo "Fetching expected SHA-256 from release notes..."
+        EXPECTED_SHA=$(gh release view \
+          "Ghidra_${VERSION}_build" \
+          --repo NationalSecurityAgency/ghidra \
+          --json body \
+          --jq ".body" \
+          | grep -i "${ASSET_NAME}" \
+          | grep -oE '[0-9a-f]{64}' \
+          | head -1)
+
+        if [ -n "$EXPECTED_SHA" ]; then
+          echo "Verifying SHA-256: expected ${EXPECTED_SHA}"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ACTUAL_SHA=$(shasum -a 256 "$ZIP_PATH" | cut -d' ' -f1)
+          else
+            ACTUAL_SHA=$(sha256sum "$ZIP_PATH" | cut -d' ' -f1)
+          fi
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::SHA-256 mismatch for ${ASSET_NAME}"
+            echo "  expected: ${EXPECTED_SHA}"
+            echo "  actual:   ${ACTUAL_SHA}"
+            exit 1
+          fi
+          echo "SHA-256 verified OK."
+        else
+          echo "::warning::Could not extract expected SHA-256 from release notes; skipping verification."
+        fi
+
+        # ---- Extract ------------------------------------------------
+        echo "Extracting ${ZIP_PATH} → ${INSTALL_DIR}..."
+        unzip -q "$ZIP_PATH" -d "$INSTALL_DIR"
+        rm "$ZIP_PATH"
+        echo "Extraction complete."
+
+    # ------------------------------------------------------------------
+    # 5. Mark analyzeHeadless as executable (Unix only)
+    # ------------------------------------------------------------------
+    - name: Set executable bit on analyzeHeadless
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        GHIDRA_HEADLESS: ${{ steps.resolve.outputs.ghidra-headless }}
+      run: chmod +x "$GHIDRA_HEADLESS"
+
+    # ------------------------------------------------------------------
+    # 6. Export environment variables for subsequent steps
+    # ------------------------------------------------------------------
+    - name: Export GHIDRA_HOME and GHIDRA_HEADLESS
+      shell: bash
+      env:
+        GHIDRA_HOME: ${{ steps.resolve.outputs.ghidra-home }}
+        GHIDRA_HEADLESS: ${{ steps.resolve.outputs.ghidra-headless }}
+      run: |
+        echo "GHIDRA_HOME=${GHIDRA_HOME}"         >> "$GITHUB_ENV"
+        echo "GHIDRA_HEADLESS=${GHIDRA_HEADLESS}" >> "$GITHUB_ENV"
+        echo "Ghidra ${{ steps.resolve.outputs.version }} ready at ${GHIDRA_HOME}"

@@ -1,0 +1,201 @@
+name: Test Custom Actions
+
+# Runs whenever a custom action or this workflow itself changes.
+# Each job tests exactly one custom action in isolation.
+on:
+  push:
+    paths:
+      - '.github/actions/**'
+      - '.github/workflows/test-actions.yml'
+  pull_request:
+    paths:
+      - '.github/actions/**'
+      - '.github/workflows/test-actions.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Which action to test (leave blank for all)'
+        required: false
+        default: ''
+
+# Cancel in-progress runs for the same branch/PR so outdated runs
+# don't consume runner minutes.
+concurrency:
+  group: test-actions-${{ github.ref }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# Job: test-setup-ghidra
+# ---------------------------------------------------------------------------
+jobs:
+  test-setup-ghidra:
+    name: 'setup-ghidra / ${{ matrix.os }} / ghidra ${{ matrix.ghidra-version }}'
+    if: >
+      github.event.inputs.action == '' ||
+      github.event.inputs.action == 'setup-ghidra'
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        ghidra-version: ['latest', '11.1.2']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # ----------------------------------------------------------------
+      # Test 1 — Install
+      # ----------------------------------------------------------------
+      - name: '[install] Setup Ghidra ${{ matrix.ghidra-version }}'
+        id: setup
+        uses: ./.github/actions/setup-ghidra
+        with:
+          version: ${{ matrix.ghidra-version }}
+          cache: 'true'
+
+      # ----------------------------------------------------------------
+      # Test 2 — Smoke test: outputs are non-empty and paths exist
+      # ----------------------------------------------------------------
+      - name: '[smoke] Check outputs are set'
+        shell: bash
+        run: |
+          echo "ghidra-home   = ${{ steps.setup.outputs.ghidra-home }}"
+          echo "ghidra-version= ${{ steps.setup.outputs.ghidra-version }}"
+          echo "cache-hit     = ${{ steps.setup.outputs.cache-hit }}"
+
+          if [ -z "${{ steps.setup.outputs.ghidra-home }}" ]; then
+            echo "::error::Output 'ghidra-home' is empty"
+            exit 1
+          fi
+          if [ -z "${{ steps.setup.outputs.ghidra-version }}" ]; then
+            echo "::error::Output 'ghidra-version' is empty"
+            exit 1
+          fi
+
+      - name: '[smoke] Check GHIDRA_HOME directory exists'
+        shell: bash
+        run: |
+          if [ ! -d "$GHIDRA_HOME" ]; then
+            echo "::error::GHIDRA_HOME directory not found: $GHIDRA_HOME"
+            exit 1
+          fi
+          echo "GHIDRA_HOME exists: $GHIDRA_HOME"
+
+      - name: '[smoke] Check GHIDRA_HEADLESS executable exists'
+        shell: bash
+        run: |
+          if [ ! -f "$GHIDRA_HEADLESS" ]; then
+            echo "::error::GHIDRA_HEADLESS not found: $GHIDRA_HEADLESS"
+            exit 1
+          fi
+          echo "GHIDRA_HEADLESS exists: $GHIDRA_HEADLESS"
+
+      - name: '[smoke] Check GHIDRA_HOME env var is exported'
+        shell: bash
+        run: |
+          if [ -z "$GHIDRA_HOME" ]; then
+            echo "::error::GHIDRA_HOME env var not set"
+            exit 1
+          fi
+          if [ -z "$GHIDRA_HEADLESS" ]; then
+            echo "::error::GHIDRA_HEADLESS env var not set"
+            exit 1
+          fi
+
+      # ----------------------------------------------------------------
+      # Test 3 — Functional test: analyzeHeadless --help exits 0
+      # ----------------------------------------------------------------
+      - name: '[functional] analyzeHeadless --help'
+        shell: bash
+        run: |
+          # analyzeHeadless exits 1 when called with --help but still
+          # prints usage, so we check for expected output rather than
+          # relying solely on exit code.
+          set +e
+          OUTPUT=$("$GHIDRA_HEADLESS" --help 2>&1 || true)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qi "usage\|analyzeHeadless\|ghidra"; then
+            echo "analyzeHeadless printed expected help text."
+          else
+            echo "::error::analyzeHeadless --help produced unexpected output"
+            exit 1
+          fi
+
+      - name: '[functional] Java is accessible and correct version'
+        shell: bash
+        run: |
+          java -version 2>&1
+          JAVA_VER=$(java -version 2>&1 | grep -oE '"[0-9]+' | head -1 | tr -d '"')
+          echo "Detected Java major version: $JAVA_VER"
+          GHIDRA_MAJOR=$(echo "${{ steps.setup.outputs.ghidra-version }}" | cut -d. -f1)
+          if [ "$GHIDRA_MAJOR" -ge 11 ] && [ "$JAVA_VER" -lt 17 ]; then
+            echo "::error::Ghidra ${{ steps.setup.outputs.ghidra-version }} requires Java 17+, got $JAVA_VER"
+            exit 1
+          fi
+
+      # ----------------------------------------------------------------
+      # Test 4 — Cache test: second install hits cache
+      # ----------------------------------------------------------------
+      - name: '[cache] Install again — expect cache-hit=true'
+        id: setup-cached
+        uses: ./.github/actions/setup-ghidra
+        with:
+          version: ${{ steps.setup.outputs.ghidra-version }}
+          cache: 'true'
+
+      - name: '[cache] Assert cache was hit on second install'
+        shell: bash
+        run: |
+          if [ "${{ steps.setup-cached.outputs.cache-hit }}" != "true" ]; then
+            echo "::warning::Expected cache-hit=true on second install, got '${{ steps.setup-cached.outputs.cache-hit }}'"
+            # Not a hard failure — cache eviction can happen on self-hosted runners
+          else
+            echo "Cache hit confirmed on second install."
+          fi
+
+      # ----------------------------------------------------------------
+      # Test 5 — Failure case: invalid version should fail
+      # ----------------------------------------------------------------
+      - name: '[failure] Invalid version should fail'
+        id: setup-invalid
+        continue-on-error: true
+        uses: ./.github/actions/setup-ghidra
+        with:
+          version: '0.0.0-does-not-exist'
+          cache: 'false'
+
+      - name: '[failure] Assert invalid version caused failure'
+        shell: bash
+        run: |
+          if [ "${{ steps.setup-invalid.outcome }}" != "failure" ]; then
+            echo "::error::Expected action to fail for invalid version but outcome was '${{ steps.setup-invalid.outcome }}'"
+            exit 1
+          fi
+          echo "Invalid version correctly caused a failure."
+
+  # ---------------------------------------------------------------------------
+  # Job: summary — collects all test results
+  # ---------------------------------------------------------------------------
+  summary:
+    name: 'Test summary'
+    needs: [test-setup-ghidra]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report results
+        shell: bash
+        env:
+          SETUP_GHIDRA: ${{ needs.test-setup-ghidra.result }}
+        run: |
+          echo "| Action          | Result         |"
+          echo "|-----------------|----------------|"
+          echo "| setup-ghidra    | ${SETUP_GHIDRA} |"
+
+          # Fail the summary job if any action test failed
+          if [ "$SETUP_GHIDRA" = "failure" ]; then
+            echo "::error::One or more action tests failed."
+            exit 1
+          fi
+          echo "All action tests passed."

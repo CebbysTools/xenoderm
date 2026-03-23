@@ -4,12 +4,17 @@ description: >
   Sets GHIDRA_HOME and GHIDRA_HEADLESS environment variables.
 
 inputs:
-  version:
+  ghidra-version:
     description: >
       Ghidra version to install (e.g. "11.1.2") or "latest" to resolve
       automatically via the GitHub Releases API.
     required: false
     default: "latest"
+  python-version:
+    description: "Version of Python to use for internal scripts."
+    required: false
+    default: "3.14"
+
   java-distribution:
     description: >
       JDK distribution passed to actions/setup-java.
@@ -27,20 +32,13 @@ inputs:
     required: false
     default: "true"
 
-  python-version:
-    description: "Version of Python to use for internal scripts."
-    required: false
-    default: "3.14"
-
 outputs:
   ghidra-home:
     description: "Absolute path to the Ghidra installation directory."
     value: ${{ steps.resolve.outputs.ghidra-home }}
-
   ghidra-version:
     description: 'Resolved Ghidra version string, e.g. "11.1.2".'
-    value: ${{ steps.resolve.outputs.version }}
-
+    value: ${{ steps.resolve.outputs.ghidra-version }}
   cache-hit:
     description: '"true" if Ghidra was restored from the runner cache.'
     value: ${{ steps.cache.outputs.cache-hit }}
@@ -60,6 +58,8 @@ runs:
     - name: Resolve Ghidra version and install path
       id: resolve
       shell: bash
+      env:
+        GHIDRA_VERSION: ${{ inputs.ghidra-version }}
       run: python ${{ github.action_path }}/ghidra_download.py
       # env:
       #   INPUT_VERSION: ${{ inputs.version }}

@@ -13,7 +13,18 @@ import logging
 import sys
 import os
 
-from typing import Optional, List, Dict, Any
+from requests import (
+    Session,
+)
+from typing import (
+    Optional,
+    List,
+    Dict,
+    Any,
+)
+from os import (
+    environ as ENVIRONMENT,
+)
 
 
 def get_releases(session: requests.Session, repo: str) -> List[Dict[str, Any]]:
@@ -48,58 +59,90 @@ def download_asset(session: requests.Session, asset: Dict[str, Any], out_dir: st
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=get_log_level("LOG_LEVEL", default=logging.INFO),
+        format="[%(levelname)s] %(message)s"
+    )
 
-    version = os.getenv("GHIDRA_VERSION")
-    if not version:
-        logging.error("GHIDRA_VERSION environment variable is required")
-        sys.exit(2)
+    try:
+        version = get_string("GHIDRA_VERSION")
+        out_dir = get_string("OUTPUT_DIR", default=".")
+        with open_session() as session:
+            logging.info("Querying releases for NationalSecurityAgency/ghidra")
+            try:
+                releases: List[Dict[str, Any]] = get_releases(session, "NationalSecurityAgency/ghidra")
+            except Exception as e:
+                logging.error("Failed to fetch releases: %s", e)
+                sys.exit(1)
+            release: Optional[Dict[str, Any]] = find_release(releases, version)
+            if not release:
+                logging.error("No release matching version '%s' found in NationalSecurityAgency/ghidra", version)
+                sys.exit(3)
 
-    out_dir = os.getenv("OUTPUT_DIR", ".")
-    repo = os.getenv("GHIDRA_REPO", "NationalSecurityAgency/ghidra")
-    token = os.getenv("GITHUB_TOKEN")
+            logging.info("Found release: %s", release.get("tag_name"))
 
-    session: requests.Session = requests.Session()
-    headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "ghidra-downloader"}
-    if token:
+            # find a zip asset
+            asset: Optional[Dict[str, Any]] = None
+            for a in release.get("assets", []):
+                name = (a.get("name") or "").lower()
+                if name.endswith('.zip') or '.zip' in name:
+                    asset = a
+                    break
+
+            if not asset:
+                logging.error("No zip asset found in release %s", release.get("tag_name"))
+                sys.exit(4)
+
+            logging.info("Downloading asset %s", asset.get("name"))
+            os.makedirs(out_dir, exist_ok=True)
+            try:
+                path = download_asset(session, asset, out_dir)
+            except Exception as e:
+                logging.error("Download failed: %s", e)
+                sys.exit(5)
+
+            logging.info("Downloaded to %s", path)
+    except BaseException as e:
+        raise BaseException(f"Error in setup-ghidra action") from e
+    
+
+def open_session():
+    try:
+        logging.debug("Opening HTTP session")
+        session = Session()
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "ghidra-downloader"
+        }
+        token = get_string("GITHUB_TOKEN")
         headers["Authorization"] = f"token {token}"
-    session.headers.update(headers)
+        session.headers.update(headers)
+        logging.debug("HTTP session opened successfully")
+        return session
+    except BaseException as e:
+        raise BaseException(f"Failed to create HTTP session") from e
 
-    logging.info("Querying releases for %s", repo)
+
+def get_string(key:str, *, default: str|None = None) -> str:
+    if key in ENVIRONMENT:
+        return ENVIRONMENT[key]
+    if default is not None:
+        return default
+    raise ValueError(f"Environment variable '{key}' is not found and no default value provided")
+
+def get_int(key:str, *, default: int|None = None) -> int:
+    s = get_string(key, default=str(default) if default is not None else None)
     try:
-        releases: List[Dict[str, Any]] = get_releases(session, repo)
-    except Exception as e:
-        logging.error("Failed to fetch releases: %s", e)
-        sys.exit(1)
-    release: Optional[Dict[str, Any]] = find_release(releases, version)
-    if not release:
-        logging.error("No release matching version '%s' found in %s", version, repo)
-        sys.exit(3)
-
-    logging.info("Found release: %s", release.get("tag_name"))
-
-    # find a zip asset
-    asset: Optional[Dict[str, Any]] = None
-    for a in release.get("assets", []):
-        name = (a.get("name") or "").lower()
-        if name.endswith('.zip') or '.zip' in name:
-            asset = a
-            break
-
-    if not asset:
-        logging.error("No zip asset found in release %s", release.get("tag_name"))
-        sys.exit(4)
-
-    logging.info("Downloading asset %s", asset.get("name"))
-    os.makedirs(out_dir, exist_ok=True)
-    try:
-        path = download_asset(session, asset, out_dir)
-    except Exception as e:
-        logging.error("Download failed: %s", e)
-        sys.exit(5)
-
-    logging.info("Downloaded to %s", path)
-
+        return int(s)
+    except ValueError as e:
+        raise ValueError(f"Environment variable '{key}' value '{s}' cannot be converted to int") from e
+    
+def get_log_level(key:str, *, default: int = logging.INFO) -> int:
+    s = get_string(key, default=str(default))
+    level = getattr(logging, s.upper(), None)
+    if isinstance(level, int):
+        return level
+    raise ValueError(f"Environment variable '{key}' value '{s}' is not a valid log level")
 
 if __name__ == '__main__':
     main()

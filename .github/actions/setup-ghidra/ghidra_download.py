@@ -63,8 +63,18 @@ def unzip_asset(asset: Path):
             with ZipFile(asset, 'r') as zip_ref:
                 zip_ref.extractall(tmpdir)
                 logging.debug(f"Extracted zip asset to temporary directory {tmpdir}")
-                for item in tmpdir.iterdir():
-                    logging.debug(str(item))
+                items = [i for i in tmpdir.iterdir()]
+                if len(items) != 1:
+                    raise ValueError(f"Expected exactly one item in the zip archive, found {len(items)} items {[str(i) for i in items]}")
+                item = items[0]
+                if item.is_dir():
+                    item.rename(parent)
+                    asset.unlink()
+                    
+        if get_log_level() <= logging.DEBUG:
+            logging.debug(f"Directory '{asset}' contents")
+            for i in parent.iterdir():
+                logging.debug(str(i))
     except BaseException as e:
         raise BaseException("Failed to unzip asset") from e
 

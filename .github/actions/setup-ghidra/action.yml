@@ -21,13 +21,12 @@ inputs:
   install-path:
     description: >
       Directory where Ghidra will be installed.
-      Defaults to $RUNNER_TOOL_CACHE/ghidra.
+      Defaults to {RUNNER_TOOL_CACHE}/ghidra/{version}.
     required: false
     default: ''
 
   cache:
-    description: >
-      Whether to cache the Ghidra installation between runs.
+    description: 'Whether to cache the Ghidra installation between runs.'
     required: false
     default: 'true'
 
@@ -49,73 +48,105 @@ runs:
   steps:
 
     # ------------------------------------------------------------------
-    # 1. Resolve version and compute paths
+    # 1. Resolve version, Java requirement, paths, and download URL
     # ------------------------------------------------------------------
     - name: Resolve version and paths
       id: resolve
-      shell: bash
+      shell: python
       env:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_INSTALL_PATH: ${{ inputs.install-path }}
+        RUNNER_OS: ${{ runner.os }}
         GH_TOKEN: ${{ github.token }}
       run: |
-        set -euo pipefail
+        import json
+        import os
+        import re
+        import sys
+        import urllib.request
+
+        def gh_api(path, token):
+            url = f"https://api.github.com{path}"
+            req = urllib.request.Request(url, headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "Authorization": f"Bearer {token}",
+            })
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read())
+
+        token       = os.environ["GH_TOKEN"]
+        runner_os   = os.environ["RUNNER_OS"]
+        input_ver   = os.environ["INPUT_VERSION"]
+        input_path  = os.environ.get("INPUT_INSTALL_PATH", "")
+        tool_cache  = os.environ.get("RUNNER_TOOL_CACHE", "/tmp")
 
         # ---- Resolve version ----------------------------------------
-        if [ "$INPUT_VERSION" = "latest" ]; then
-          echo "Querying latest Ghidra release via GitHub API..."
-          VERSION=$(gh release view \
-            --repo NationalSecurityAgency/ghidra \
-            --json tagName \
-            --jq '.tagName | ltrimstr("Ghidra_") | rtrimstr("_build")')
-        else
-          VERSION="$INPUT_VERSION"
-        fi
-        echo "Resolved Ghidra version: $VERSION"
+        if input_ver == "latest":
+            print("Querying latest Ghidra release via GitHub API...")
+            release = gh_api(
+                "/repos/NationalSecurityAgency/ghidra/releases/latest",
+                token,
+            )
+            tag = release["tag_name"]   # e.g. "Ghidra_11.1.2_build"
+        else:
+            tag = f"Ghidra_{input_ver}_build"
+            release = gh_api(
+                f"/repos/NationalSecurityAgency/ghidra/releases/tags/{tag}",
+                token,
+            )
 
-        # ---- Determine Java version required ------------------------
-        MAJOR=$(echo "$VERSION" | cut -d. -f1)
-        if [ "$MAJOR" -ge 11 ]; then
-          JAVA_VERSION="17"
-        else
-          JAVA_VERSION="11"
-        fi
+        version = re.sub(r"^Ghidra_|_build$", "", tag)
+        print(f"Resolved Ghidra version: {version}")
 
-        # ---- Compute install path -----------------------------------
-        if [ -n "$INPUT_INSTALL_PATH" ]; then
-          INSTALL_DIR="$INPUT_INSTALL_PATH"
-        else
-          INSTALL_DIR="${RUNNER_TOOL_CACHE}/ghidra/${VERSION}"
-        fi
+        # ---- Determine required Java version ------------------------
+        major = int(version.split(".")[0])
+        java_version = "17" if major >= 11 else "11"
 
-        # ---- Build download URL from release asset name -------------
-        # Official release asset name pattern:
-        #   ghidra_<version>_PUBLIC_<date>.zip
-        # We query the release assets to find the actual zip name.
-        ASSET_NAME=$(gh release view \
-          "Ghidra_${VERSION}_build" \
-          --repo NationalSecurityAgency/ghidra \
-          --json assets \
-          --jq '.assets[] | select(.name | endswith(".zip")) | .name')
+        # ---- Find the zip asset in the release ----------------------
+        zip_assets = [
+            a for a in release["assets"]
+            if a["name"].endswith(".zip")
+        ]
+        if not zip_assets:
+            print("::error::No .zip asset found in Ghidra release", file=sys.stderr)
+            sys.exit(1)
+        asset      = zip_assets[0]
+        asset_name = asset["name"]
+        download_url = asset["browser_download_url"]
 
-        DOWNLOAD_URL="https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${VERSION}_build/${ASSET_NAME}"
+        # ---- Extract expected SHA-256 from release body -------------
+        body = release.get("body", "")
+        sha_match = re.search(
+            rf"{re.escape(asset_name)}.*?([0-9a-f]{{64}})", body, re.IGNORECASE | re.DOTALL
+        )
+        expected_sha = sha_match.group(1) if sha_match else ""
+        if not expected_sha:
+            print("::warning::Could not extract SHA-256 from release notes; "
+                  "integrity check will be skipped.")
 
-        # ---- Compute headless path (OS-aware) -----------------------
-        if [ "$RUNNER_OS" = "Windows" ]; then
-          GHIDRA_HEADLESS="${INSTALL_DIR}/ghidra_${VERSION}_PUBLIC/support/analyzeHeadless.bat"
-        else
-          GHIDRA_HEADLESS="${INSTALL_DIR}/ghidra_${VERSION}_PUBLIC/support/analyzeHeadless"
-        fi
-        GHIDRA_HOME="${INSTALL_DIR}/ghidra_${VERSION}_PUBLIC"
+        # ---- Compute install paths ----------------------------------
+        install_dir = input_path or os.path.join(tool_cache, "ghidra", version)
+        ghidra_home = os.path.join(install_dir, f"ghidra_{version}_PUBLIC")
+        if runner_os == "Windows":
+            ghidra_headless = os.path.join(
+                ghidra_home, "support", "analyzeHeadless.bat"
+            )
+        else:
+            ghidra_headless = os.path.join(
+                ghidra_home, "support", "analyzeHeadless"
+            )
 
-        # ---- Export outputs -----------------------------------------
-        echo "version=${VERSION}"           >> "$GITHUB_OUTPUT"
-        echo "java-version=${JAVA_VERSION}" >> "$GITHUB_OUTPUT"
-        echo "install-dir=${INSTALL_DIR}"   >> "$GITHUB_OUTPUT"
-        echo "asset-name=${ASSET_NAME}"     >> "$GITHUB_OUTPUT"
-        echo "download-url=${DOWNLOAD_URL}" >> "$GITHUB_OUTPUT"
-        echo "ghidra-home=${GHIDRA_HOME}"   >> "$GITHUB_OUTPUT"
-        echo "ghidra-headless=${GHIDRA_HEADLESS}" >> "$GITHUB_OUTPUT"
+        # ---- Write outputs ------------------------------------------
+        with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+            fh.write(f"version={version}\n")
+            fh.write(f"java-version={java_version}\n")
+            fh.write(f"install-dir={install_dir}\n")
+            fh.write(f"asset-name={asset_name}\n")
+            fh.write(f"download-url={download_url}\n")
+            fh.write(f"expected-sha={expected_sha}\n")
+            fh.write(f"ghidra-home={ghidra_home}\n")
+            fh.write(f"ghidra-headless={ghidra_headless}\n")
 
     # ------------------------------------------------------------------
     # 2. Install the required JDK
@@ -132,86 +163,129 @@ runs:
     - name: Restore Ghidra from cache
       id: cache
       if: inputs.cache == 'true'
-      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684   # v4.2.3
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
       with:
         path: ${{ steps.resolve.outputs.install-dir }}
         key: ghidra-${{ steps.resolve.outputs.version }}-${{ runner.os }}
 
     # ------------------------------------------------------------------
-    # 4. Download and install Ghidra (only on cache miss)
+    # 4. Download, verify, and extract Ghidra (cache miss only)
     # ------------------------------------------------------------------
     - name: Download Ghidra ${{ steps.resolve.outputs.version }}
       if: steps.cache.outputs.cache-hit != 'true'
-      shell: bash
+      shell: python
       env:
         DOWNLOAD_URL: ${{ steps.resolve.outputs.download-url }}
-        ASSET_NAME: ${{ steps.resolve.outputs.asset-name }}
-        VERSION: ${{ steps.resolve.outputs.version }}
-        INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
-        GH_TOKEN: ${{ github.token }}
+        ASSET_NAME:   ${{ steps.resolve.outputs.asset-name }}
+        EXPECTED_SHA: ${{ steps.resolve.outputs.expected-sha }}
+        INSTALL_DIR:  ${{ steps.resolve.outputs.install-dir }}
       run: |
-        set -euo pipefail
+        import hashlib
+        import os
+        import sys
+        import urllib.request
+        import zipfile
+        from pathlib import Path
 
-        mkdir -p "$INSTALL_DIR"
-        ZIP_PATH="${INSTALL_DIR}/${ASSET_NAME}"
+        download_url = os.environ["DOWNLOAD_URL"]
+        asset_name   = os.environ["ASSET_NAME"]
+        expected_sha = os.environ.get("EXPECTED_SHA", "")
+        install_dir  = Path(os.environ["INSTALL_DIR"])
+        install_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = install_dir / asset_name
 
-        echo "Downloading ${DOWNLOAD_URL}..."
-        curl -fsSL -o "$ZIP_PATH" "$DOWNLOAD_URL"
+        # ---- Download -----------------------------------------------
+        print(f"Downloading {download_url} ...")
+        sha256 = hashlib.sha256()
+        req = urllib.request.Request(download_url, headers={
+            "User-Agent": "xenoderm-ci",
+        })
+        with urllib.request.urlopen(req) as resp, zip_path.open("wb") as fh:
+            block = 1 << 16   # 64 KiB
+            downloaded = 0
+            while True:
+                chunk = resp.read(block)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                sha256.update(chunk)
+                downloaded += len(chunk)
+                if downloaded % (1 << 23) == 0:   # log every 8 MiB
+                    print(f"  {downloaded // (1 << 20)} MiB downloaded...")
 
-        # ---- Verify SHA-256 against published hash ------------------
-        echo "Fetching expected SHA-256 from release notes..."
-        EXPECTED_SHA=$(gh release view \
-          "Ghidra_${VERSION}_build" \
-          --repo NationalSecurityAgency/ghidra \
-          --json body \
-          --jq ".body" \
-          | grep -i "${ASSET_NAME}" \
-          | grep -oE '[0-9a-f]{64}' \
-          | head -1)
+        actual_sha = sha256.hexdigest()
+        print(f"Download complete ({downloaded // (1 << 20)} MiB). SHA-256: {actual_sha}")
 
-        if [ -n "$EXPECTED_SHA" ]; then
-          echo "Verifying SHA-256: expected ${EXPECTED_SHA}"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            ACTUAL_SHA=$(shasum -a 256 "$ZIP_PATH" | cut -d' ' -f1)
-          else
-            ACTUAL_SHA=$(sha256sum "$ZIP_PATH" | cut -d' ' -f1)
-          fi
-          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::error::SHA-256 mismatch for ${ASSET_NAME}"
-            echo "  expected: ${EXPECTED_SHA}"
-            echo "  actual:   ${ACTUAL_SHA}"
-            exit 1
-          fi
-          echo "SHA-256 verified OK."
-        else
-          echo "::warning::Could not extract expected SHA-256 from release notes; skipping verification."
-        fi
+        # ---- Verify -------------------------------------------------
+        if expected_sha:
+            if actual_sha != expected_sha:
+                print(
+                    f"::error::SHA-256 mismatch for {asset_name}\n"
+                    f"  expected: {expected_sha}\n"
+                    f"  actual:   {actual_sha}",
+                    file=sys.stderr,
+                )
+                zip_path.unlink(missing_ok=True)
+                sys.exit(1)
+            print("SHA-256 verified OK.")
+        else:
+            print("::warning::Skipping SHA-256 verification (hash not found in release notes).")
 
         # ---- Extract ------------------------------------------------
-        echo "Extracting ${ZIP_PATH} → ${INSTALL_DIR}..."
-        unzip -q "$ZIP_PATH" -d "$INSTALL_DIR"
-        rm "$ZIP_PATH"
-        echo "Extraction complete."
+        print(f"Extracting {zip_path} → {install_dir} ...")
+        with zipfile.ZipFile(zip_path) as zf:
+            members = zf.infolist()
+            total   = len(members)
+            for i, member in enumerate(members, 1):
+                zf.extract(member, install_dir)
+                if i % 500 == 0:
+                    print(f"  {i}/{total} files extracted...")
+        print("Extraction complete.")
+
+        # ---- Remove zip to save space -------------------------------
+        zip_path.unlink()
+        print("Zip removed.")
 
     # ------------------------------------------------------------------
-    # 5. Mark analyzeHeadless as executable (Unix only)
+    # 5. Mark analyzeHeadless as executable (non-Windows only)
     # ------------------------------------------------------------------
     - name: Set executable bit on analyzeHeadless
       if: runner.os != 'Windows'
-      shell: bash
+      shell: python
       env:
-        GHIDRA_HEADLESS: ${{ steps.resolve.outputs.ghidra-headless }}
-      run: chmod +x "$GHIDRA_HEADLESS"
-
-    # ------------------------------------------------------------------
-    # 6. Export environment variables for subsequent steps
-    # ------------------------------------------------------------------
-    - name: Export GHIDRA_HOME and GHIDRA_HEADLESS
-      shell: bash
-      env:
-        GHIDRA_HOME: ${{ steps.resolve.outputs.ghidra-home }}
         GHIDRA_HEADLESS: ${{ steps.resolve.outputs.ghidra-headless }}
       run: |
-        echo "GHIDRA_HOME=${GHIDRA_HOME}"         >> "$GITHUB_ENV"
-        echo "GHIDRA_HEADLESS=${GHIDRA_HEADLESS}" >> "$GITHUB_ENV"
-        echo "Ghidra ${{ steps.resolve.outputs.version }} ready at ${GHIDRA_HOME}"
+        import os
+        import stat
+        from pathlib import Path
+
+        headless = Path(os.environ["GHIDRA_HEADLESS"])
+        if not headless.exists():
+            raise FileNotFoundError(f"analyzeHeadless not found: {headless}")
+        current = headless.stat().st_mode
+        headless.chmod(current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        print(f"Executable bit set on {headless}")
+
+    # ------------------------------------------------------------------
+    # 6. Export GHIDRA_HOME and GHIDRA_HEADLESS to the environment
+    # ------------------------------------------------------------------
+    - name: Export GHIDRA_HOME and GHIDRA_HEADLESS
+      shell: python
+      env:
+        _GHIDRA_HOME:     ${{ steps.resolve.outputs.ghidra-home }}
+        _GHIDRA_HEADLESS: ${{ steps.resolve.outputs.ghidra-headless }}
+        _VERSION:         ${{ steps.resolve.outputs.version }}
+      run: |
+        import os
+
+        ghidra_home     = os.environ["_GHIDRA_HOME"]
+        ghidra_headless = os.environ["_GHIDRA_HEADLESS"]
+        version         = os.environ["_VERSION"]
+
+        with open(os.environ["GITHUB_ENV"], "a") as fh:
+            fh.write(f"GHIDRA_HOME={ghidra_home}\n")
+            fh.write(f"GHIDRA_HEADLESS={ghidra_headless}\n")
+
+        print(f"Ghidra {version} ready.")
+        print(f"  GHIDRA_HOME     = {ghidra_home}")
+        print(f"  GHIDRA_HEADLESS = {ghidra_headless}")

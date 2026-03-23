@@ -18,8 +18,7 @@ on:
         required: false
         default: ''
 
-# Cancel in-progress runs for the same branch/PR so outdated runs
-# don't consume runner minutes.
+# Cancel in-progress runs for the same branch/PR.
 concurrency:
   group: test-actions-${{ github.ref }}
   cancel-in-progress: true
@@ -56,87 +55,165 @@ jobs:
           cache: 'true'
 
       # ----------------------------------------------------------------
-      # Test 2 — Smoke test: outputs are non-empty and paths exist
+      # Test 2 — Smoke: outputs are non-empty and paths exist
       # ----------------------------------------------------------------
-      - name: '[smoke] Check outputs are set'
-        shell: bash
+      - name: '[smoke] Outputs are set and non-empty'
+        shell: python
+        env:
+          OUT_GHIDRA_HOME: ${{ steps.setup.outputs.ghidra-home }}
+          OUT_VERSION:     ${{ steps.setup.outputs.ghidra-version }}
+          OUT_CACHE_HIT:   ${{ steps.setup.outputs.cache-hit }}
         run: |
-          echo "ghidra-home   = ${{ steps.setup.outputs.ghidra-home }}"
-          echo "ghidra-version= ${{ steps.setup.outputs.ghidra-version }}"
-          echo "cache-hit     = ${{ steps.setup.outputs.cache-hit }}"
+          import os
+          import sys
 
-          if [ -z "${{ steps.setup.outputs.ghidra-home }}" ]; then
-            echo "::error::Output 'ghidra-home' is empty"
-            exit 1
-          fi
-          if [ -z "${{ steps.setup.outputs.ghidra-version }}" ]; then
-            echo "::error::Output 'ghidra-version' is empty"
-            exit 1
-          fi
+          failures = []
+          for var in ("OUT_GHIDRA_HOME", "OUT_VERSION"):
+              val = os.environ.get(var, "")
+              if not val:
+                  failures.append(f"Output '{var}' is empty")
+              else:
+                  print(f"{var} = {val}")
 
-      - name: '[smoke] Check GHIDRA_HOME directory exists'
-        shell: bash
+          print(f"OUT_CACHE_HIT = {os.environ.get('OUT_CACHE_HIT', '')}")
+
+          if failures:
+              for msg in failures:
+                  print(f"::error::{msg}", file=sys.stderr)
+              sys.exit(1)
+
+      - name: '[smoke] GHIDRA_HOME directory exists'
+        shell: python
+        env:
+          GHIDRA_HOME: ${{ steps.setup.outputs.ghidra-home }}
         run: |
-          if [ ! -d "$GHIDRA_HOME" ]; then
-            echo "::error::GHIDRA_HOME directory not found: $GHIDRA_HOME"
-            exit 1
-          fi
-          echo "GHIDRA_HOME exists: $GHIDRA_HOME"
+          import os
+          import sys
+          from pathlib import Path
 
-      - name: '[smoke] Check GHIDRA_HEADLESS executable exists'
-        shell: bash
-        run: |
-          if [ ! -f "$GHIDRA_HEADLESS" ]; then
-            echo "::error::GHIDRA_HEADLESS not found: $GHIDRA_HEADLESS"
-            exit 1
-          fi
-          echo "GHIDRA_HEADLESS exists: $GHIDRA_HEADLESS"
+          home = Path(os.environ["GHIDRA_HOME"])
+          if not home.is_dir():
+              print(f"::error::GHIDRA_HOME directory not found: {home}", file=sys.stderr)
+              sys.exit(1)
+          print(f"GHIDRA_HOME exists: {home}")
 
-      - name: '[smoke] Check GHIDRA_HOME env var is exported'
-        shell: bash
+      - name: '[smoke] GHIDRA_HEADLESS executable exists'
+        shell: python
+        env:
+          GHIDRA_HEADLESS: ${{ env.GHIDRA_HEADLESS }}
         run: |
-          if [ -z "$GHIDRA_HOME" ]; then
-            echo "::error::GHIDRA_HOME env var not set"
-            exit 1
-          fi
-          if [ -z "$GHIDRA_HEADLESS" ]; then
-            echo "::error::GHIDRA_HEADLESS env var not set"
-            exit 1
-          fi
+          import os
+          import sys
+          from pathlib import Path
 
-      # ----------------------------------------------------------------
-      # Test 3 — Functional test: analyzeHeadless --help exits 0
-      # ----------------------------------------------------------------
-      - name: '[functional] analyzeHeadless --help'
-        shell: bash
-        run: |
-          # analyzeHeadless exits 1 when called with --help but still
-          # prints usage, so we check for expected output rather than
-          # relying solely on exit code.
-          set +e
-          OUTPUT=$("$GHIDRA_HEADLESS" --help 2>&1 || true)
-          echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -qi "usage\|analyzeHeadless\|ghidra"; then
-            echo "analyzeHeadless printed expected help text."
-          else
-            echo "::error::analyzeHeadless --help produced unexpected output"
-            exit 1
-          fi
+          headless = Path(os.environ["GHIDRA_HEADLESS"])
+          if not headless.is_file():
+              print(f"::error::GHIDRA_HEADLESS not found: {headless}", file=sys.stderr)
+              sys.exit(1)
+          print(f"GHIDRA_HEADLESS exists: {headless}")
 
-      - name: '[functional] Java is accessible and correct version'
-        shell: bash
+      - name: '[smoke] GHIDRA_HOME and GHIDRA_HEADLESS env vars are exported'
+        shell: python
         run: |
-          java -version 2>&1
-          JAVA_VER=$(java -version 2>&1 | grep -oE '"[0-9]+' | head -1 | tr -d '"')
-          echo "Detected Java major version: $JAVA_VER"
-          GHIDRA_MAJOR=$(echo "${{ steps.setup.outputs.ghidra-version }}" | cut -d. -f1)
-          if [ "$GHIDRA_MAJOR" -ge 11 ] && [ "$JAVA_VER" -lt 17 ]; then
-            echo "::error::Ghidra ${{ steps.setup.outputs.ghidra-version }} requires Java 17+, got $JAVA_VER"
-            exit 1
-          fi
+          import os
+          import sys
+
+          missing = [v for v in ("GHIDRA_HOME", "GHIDRA_HEADLESS") if not os.environ.get(v)]
+          if missing:
+              for v in missing:
+                  print(f"::error::Environment variable {v} is not set", file=sys.stderr)
+              sys.exit(1)
+          print(f"GHIDRA_HOME     = {os.environ['GHIDRA_HOME']}")
+          print(f"GHIDRA_HEADLESS = {os.environ['GHIDRA_HEADLESS']}")
 
       # ----------------------------------------------------------------
-      # Test 4 — Cache test: second install hits cache
+      # Test 3 — Functional
+      # ----------------------------------------------------------------
+      - name: '[functional] analyzeHeadless --help contains expected text'
+        shell: python
+        run: |
+          import os
+          import subprocess
+          import sys
+
+          headless = os.environ["GHIDRA_HEADLESS"]
+          result = subprocess.run(
+              [headless, "--help"],
+              capture_output=True,
+              text=True,
+          )
+          output = result.stdout + result.stderr
+          print(output)
+
+          keywords = ["usage", "analyzeheadless", "ghidra"]
+          if not any(kw in output.lower() for kw in keywords):
+              print(
+                  "::error::analyzeHeadless --help produced unexpected output",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          print("analyzeHeadless produced expected help text.")
+
+      - name: '[functional] Java version satisfies Ghidra requirement'
+        shell: python
+        env:
+          GHIDRA_VERSION: ${{ steps.setup.outputs.ghidra-version }}
+        run: |
+          import os
+          import re
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              ["java", "-version"],
+              capture_output=True,
+              text=True,
+          )
+          output = result.stdout + result.stderr
+          print(output)
+
+          match = re.search(r'"(\d+)', output)
+          if not match:
+              print("::error::Could not parse Java version from output", file=sys.stderr)
+              sys.exit(1)
+
+          java_major    = int(match.group(1))
+          ghidra_ver    = os.environ["GHIDRA_VERSION"]
+          ghidra_major  = int(ghidra_ver.split(".")[0])
+          required_java = 17 if ghidra_major >= 11 else 11
+
+          print(f"Ghidra {ghidra_ver} requires Java >= {required_java}; detected Java {java_major}.")
+
+          if java_major < required_java:
+              print(
+                  f"::error::Ghidra {ghidra_ver} requires Java {required_java}+, "
+                  f"but found Java {java_major}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+      - name: '[functional] Ghidra support directory has expected layout'
+        shell: python
+        run: |
+          import os
+          import sys
+          from pathlib import Path
+
+          support = Path(os.environ["GHIDRA_HOME"]) / "support"
+          expected = ["analyzeHeadless", "launch.properties", "GhidraServer"]
+          missing  = [f for f in expected if not (support / f).exists()
+                      and not (support / (f + ".bat")).exists()]
+
+          if missing:
+              print(
+                  f"::error::Missing expected files in support/: {missing}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          print(f"Support directory layout OK: {[p.name for p in support.iterdir()]}")
+
+      # ----------------------------------------------------------------
+      # Test 4 — Cache: second install must hit the cache
       # ----------------------------------------------------------------
       - name: '[cache] Install again — expect cache-hit=true'
         id: setup-cached
@@ -146,17 +223,24 @@ jobs:
           cache: 'true'
 
       - name: '[cache] Assert cache was hit on second install'
-        shell: bash
+        shell: python
+        env:
+          CACHE_HIT: ${{ steps.setup-cached.outputs.cache-hit }}
         run: |
-          if [ "${{ steps.setup-cached.outputs.cache-hit }}" != "true" ]; then
-            echo "::warning::Expected cache-hit=true on second install, got '${{ steps.setup-cached.outputs.cache-hit }}'"
-            # Not a hard failure — cache eviction can happen on self-hosted runners
-          else
-            echo "Cache hit confirmed on second install."
-          fi
+          import os
+
+          cache_hit = os.environ.get("CACHE_HIT", "false")
+          if cache_hit != "true":
+              # Not a hard failure — cache eviction can happen on some runners
+              print(
+                  f"::warning::Expected cache-hit=true on second install, "
+                  f"got '{cache_hit}'. This may indicate a cache eviction."
+              )
+          else:
+              print("Cache hit confirmed on second install.")
 
       # ----------------------------------------------------------------
-      # Test 5 — Failure case: invalid version should fail
+      # Test 5 — Failure case: invalid version must fail
       # ----------------------------------------------------------------
       - name: '[failure] Invalid version should fail'
         id: setup-invalid
@@ -166,17 +250,26 @@ jobs:
           version: '0.0.0-does-not-exist'
           cache: 'false'
 
-      - name: '[failure] Assert invalid version caused failure'
-        shell: bash
+      - name: '[failure] Assert invalid version caused action failure'
+        shell: python
+        env:
+          OUTCOME: ${{ steps.setup-invalid.outcome }}
         run: |
-          if [ "${{ steps.setup-invalid.outcome }}" != "failure" ]; then
-            echo "::error::Expected action to fail for invalid version but outcome was '${{ steps.setup-invalid.outcome }}'"
-            exit 1
-          fi
-          echo "Invalid version correctly caused a failure."
+          import os
+          import sys
+
+          outcome = os.environ.get("OUTCOME", "")
+          if outcome != "failure":
+              print(
+                  f"::error::Expected action to fail for version "
+                  f"'0.0.0-does-not-exist' but outcome was '{outcome}'",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          print(f"Invalid version correctly caused a failure (outcome={outcome}).")
 
   # ---------------------------------------------------------------------------
-  # Job: summary — collects all test results
+  # Job: summary — collects all test results and reports
   # ---------------------------------------------------------------------------
   summary:
     name: 'Test summary'
@@ -185,17 +278,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Report results
-        shell: bash
+        shell: python
         env:
-          SETUP_GHIDRA: ${{ needs.test-setup-ghidra.result }}
+          RESULT_SETUP_GHIDRA: ${{ needs.test-setup-ghidra.result }}
         run: |
-          echo "| Action          | Result         |"
-          echo "|-----------------|----------------|"
-          echo "| setup-ghidra    | ${SETUP_GHIDRA} |"
+          import os
+          import sys
 
-          # Fail the summary job if any action test failed
-          if [ "$SETUP_GHIDRA" = "failure" ]; then
-            echo "::error::One or more action tests failed."
-            exit 1
-          fi
-          echo "All action tests passed."
+          results = {
+              "setup-ghidra": os.environ["RESULT_SETUP_GHIDRA"],
+          }
+
+          header = f"{'Action':<25} {'Result':<10}"
+          sep    = "-" * len(header)
+          print(header)
+          print(sep)
+          for action, result in results.items():
+              icon = "✓" if result == "success" else "✗"
+              print(f"{action:<25} {icon} {result}")
+          print(sep)
+
+          failed = [a for a, r in results.items() if r == "failure"]
+          if failed:
+              print(
+                  f"\n::error::Failed actions: {', '.join(failed)}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print("\nAll action tests passed.")

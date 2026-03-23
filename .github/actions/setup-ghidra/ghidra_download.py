@@ -56,7 +56,7 @@ def main() -> None:
             path = download_asset(session, asset, ghidra_home)
             unzip_asset(path)
             append_outputs(
-                ghidra_home=ghidra_home,
+                ghidra_home=ghidra_home.resolve()
             )
     except BaseException as e:
         raise BaseException(f"Error in setup-ghidra action") from e
@@ -197,12 +197,17 @@ def get_log_level() -> int:
     raise ValueError(f"Environment variable '{key}' value '{s}' is not a valid log level")
 
 def append_outputs(**kwargs: Any) -> None:
-    with open(get_string(f"GITHUB_OUTPUT"), "a") as file:
-        for k, v in kwargs.items():
-            key = k.replace(".", "_").upper()
-            value = str(v).replace("\n", "%0A").replace("\r", "%0D")
-            logging.debug(f"Appending output '{key}'='{value}'")
-            file.write(f"{key}={value}\n")
+    outputs = Path(get_string(f"GITHUB_OUTPUT")).resolve()
+    logging.debug(f"Appending outputs to GITHUB_OUTPUT file '{outputs}'")
+    try:
+        with open(outputs, "a") as file:
+            for k, v in kwargs.items():
+                key = k.replace(".", "_").upper()
+                value = str(v).replace("\n", "%0A").replace("\r", "%0D")
+                logging.debug(f"Appending output '{key}'='{value}'")
+                file.write(f"{key}={value}\n")
+    except BaseException as e:
+        raise BaseException("Failed to append outputs") from e
 
 if __name__ == '__main__':
     main()

@@ -199,7 +199,10 @@ def get_log_level() -> int:
 def append_outputs(**kwargs: Any) -> None:
     with open(get_string(f"GITHUB_OUTPUT"), "a") as file:
         for k, v in kwargs.items():
-            file.write(f"{k.replace(".", "_").upper()}={v}\n")
+            key = k.replace(".", "_").upper()
+            value = str(v).replace("\n", "%0A").replace("\r", "%0D")
+            logging.debug(f"Appending output '{key}'='{value}'")
+            file.write(f"{key}={value}\n")
 
 if __name__ == '__main__':
     main()

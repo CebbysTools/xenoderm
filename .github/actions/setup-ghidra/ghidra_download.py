@@ -51,7 +51,7 @@ def main() -> None:
             release = find_release(releases, version)
             asset = find_zip_asset(release)
             
-            out_dir = Path(get_string("OUTPUT_DIR", default="./tools")).resolve()
+            out_dir = Path(get_string("OUTPUT_DIR", default="./tools")).resolve() / "ghidra"
             out_dir.mkdir(parents=True, exist_ok=True)
             path = download_asset(session, asset, out_dir)
             unzip_asset(path)
@@ -80,7 +80,7 @@ def unzip_asset(asset: Path):
                     
         asset.unlink()
         if get_log_level() <= logging.DEBUG:
-            logging.debug(f"Directory {asset.resolve()} contents")
+            logging.debug(f"Asset {asset.resolve()} contents")
             for i in parent.iterdir():
                 logging.debug(str(i))
     except BaseException as e:

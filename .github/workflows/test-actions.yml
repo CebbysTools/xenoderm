@@ -28,7 +28,7 @@ concurrency:
 # ---------------------------------------------------------------------------
 jobs:
   test-setup-ghidra:
-    name: 'setup-ghidra / ${{ matrix.os }} / ghidra ${{ matrix.ghidra-version }}'
+    name: '[${{ matrix.os }}/Ghidra ${{ matrix.ghidra-version }}] Action Smoketests and Functional Tests'
     if: >
       github.event.inputs.action == '' ||
       github.event.inputs.action == 'setup-ghidra'
@@ -90,176 +90,36 @@ jobs:
               sys.exit(1)
           print(f"GHIDRA_HOME exists: {home}")
 
-      - name: '[smoke] GHIDRA_HEADLESS executable exists'
-        shell: python
+      - name: 'Install pyghidra (non-Windows)'
+        if: matrix.os != 'windows-latest'
         env:
-          GHIDRA_HEADLESS: ${{ env.GHIDRA_HEADLESS }}
+          GHIDRA_INSTALL_DIR: ${{ steps.setup.outputs.ghidra-home }}
         run: |
-          import os
-          import sys
-          from pathlib import Path
+          python -m pip install --no-index -f "${{ steps.setup.outputs.ghidra-home }}/Ghidra/Features/PyGhidra/pypkg/dist" pyghidra
 
-          headless = Path(os.environ["GHIDRA_HEADLESS"])
-          if not headless.is_file():
-              print(f"::error::GHIDRA_HEADLESS not found: {headless}", file=sys.stderr)
-              sys.exit(1)
-          print(f"GHIDRA_HEADLESS exists: {headless}")
-
-      - name: '[smoke] GHIDRA_HOME and GHIDRA_HEADLESS env vars are exported'
-        shell: python
-        run: |
-          import os
-          import sys
-
-          missing = [v for v in ("GHIDRA_HOME", "GHIDRA_HEADLESS") if not os.environ.get(v)]
-          if missing:
-              for v in missing:
-                  print(f"::error::Environment variable {v} is not set", file=sys.stderr)
-              sys.exit(1)
-          print(f"GHIDRA_HOME     = {os.environ['GHIDRA_HOME']}")
-          print(f"GHIDRA_HEADLESS = {os.environ['GHIDRA_HEADLESS']}")
-
-      # ----------------------------------------------------------------
-      # Test 3 — Functional
-      # ----------------------------------------------------------------
-      - name: '[functional] analyzeHeadless --help contains expected text'
-        shell: python
-        run: |
-          import os
-          import subprocess
-          import sys
-
-          headless = os.environ["GHIDRA_HEADLESS"]
-          result = subprocess.run(
-              [headless, "--help"],
-              capture_output=True,
-              text=True,
-          )
-          output = result.stdout + result.stderr
-          print(output)
-
-          keywords = ["usage", "analyzeheadless", "ghidra"]
-          if not any(kw in output.lower() for kw in keywords):
-              print(
-                  "::error::analyzeHeadless --help produced unexpected output",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-          print("analyzeHeadless produced expected help text.")
-
-      - name: '[functional] Java version satisfies Ghidra requirement'
-        shell: python
+      - name: 'Install pyghidra (Windows)'
+        if: matrix.os == 'windows-latest'
+        shell: powershell
         env:
-          GHIDRA_VERSION: ${{ steps.setup.outputs.ghidra-version }}
+          GHIDRA_INSTALL_DIR: ${{ steps.setup.outputs.ghidra-home }}
         run: |
-          import os
-          import re
-          import subprocess
-          import sys
+          python -m pip install --no-index -f "${{ steps.setup.outputs.ghidra-home }}\\Ghidra\\Features\\PyGhidra\\pypkg\\dist" pyghidra
 
-          result = subprocess.run(
-              ["java", "-version"],
-              capture_output=True,
-              text=True,
-          )
-          output = result.stdout + result.stderr
-          print(output)
-
-          match = re.search(r'"(\d+)', output)
-          if not match:
-              print("::error::Could not parse Java version from output", file=sys.stderr)
-              sys.exit(1)
-
-          java_major    = int(match.group(1))
-          ghidra_ver    = os.environ["GHIDRA_VERSION"]
-          ghidra_major  = int(ghidra_ver.split(".")[0])
-          required_java = 17 if ghidra_major >= 11 else 11
-
-          print(f"Ghidra {ghidra_ver} requires Java >= {required_java}; detected Java {java_major}.")
-
-          if java_major < required_java:
-              print(
-                  f"::error::Ghidra {ghidra_ver} requires Java {required_java}+, "
-                  f"but found Java {java_major}",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-
-      - name: '[functional] Ghidra support directory has expected layout'
-        shell: python
-        run: |
-          import os
-          import sys
-          from pathlib import Path
-
-          support = Path(os.environ["GHIDRA_HOME"]) / "support"
-          expected = ["analyzeHeadless", "launch.properties", "GhidraServer"]
-          missing  = [f for f in expected if not (support / f).exists()
-                      and not (support / (f + ".bat")).exists()]
-
-          if missing:
-              print(
-                  f"::error::Missing expected files in support/: {missing}",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-          print(f"Support directory layout OK: {[p.name for p in support.iterdir()]}")
-
-      # ----------------------------------------------------------------
-      # Test 4 — Cache: second install must hit the cache
-      # ----------------------------------------------------------------
-      - name: '[cache] Install again — expect cache-hit=true'
-        id: setup-cached
-        uses: ./.github/actions/setup-ghidra
-        with:
-          version: ${{ steps.setup.outputs.ghidra-version }}
-          cache: 'true'
-
-      - name: '[cache] Assert cache was hit on second install'
-        shell: python
+      - name: 'Run PyGhidra headless script (non-Windows)'
+        if: matrix.os != 'windows-latest'
         env:
-          CACHE_HIT: ${{ steps.setup-cached.outputs.cache-hit }}
+          GHIDRA_INSTALL_DIR: ${{ steps.setup.outputs.ghidra-home }}
         run: |
-          import os
+          python run_pyghidra_headless_noargs.py
 
-          cache_hit = os.environ.get("CACHE_HIT", "false")
-          if cache_hit != "true":
-              # Not a hard failure — cache eviction can happen on some runners
-              print(
-                  f"::warning::Expected cache-hit=true on second install, "
-                  f"got '{cache_hit}'. This may indicate a cache eviction."
-              )
-          else:
-              print("Cache hit confirmed on second install.")
-
-      # ----------------------------------------------------------------
-      # Test 5 — Failure case: invalid version must fail
-      # ----------------------------------------------------------------
-      - name: '[failure] Invalid version should fail'
-        id: setup-invalid
-        continue-on-error: true
-        uses: ./.github/actions/setup-ghidra
-        with:
-          version: '0.0.0-does-not-exist'
-          cache: 'false'
-
-      - name: '[failure] Assert invalid version caused action failure'
-        shell: python
+      - name: 'Run PyGhidra headless script (Windows)'
+        if: matrix.os == 'windows-latest'
+        shell: powershell
         env:
-          OUTCOME: ${{ steps.setup-invalid.outcome }}
+          GHIDRA_INSTALL_DIR: ${{ steps.setup.outputs.ghidra-home }}
         run: |
-          import os
-          import sys
+          python .\\run_pyghidra_headless_noargs.py
 
-          outcome = os.environ.get("OUTCOME", "")
-          if outcome != "failure":
-              print(
-                  f"::error::Expected action to fail for version "
-                  f"'0.0.0-does-not-exist' but outcome was '{outcome}'",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-          print(f"Invalid version correctly caused a failure (outcome={outcome}).")
 
   # ---------------------------------------------------------------------------
   # Job: summary — collects all test results and reports

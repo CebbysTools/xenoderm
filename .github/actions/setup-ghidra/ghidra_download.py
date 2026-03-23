@@ -8,16 +8,12 @@ Environment variables:
 - OUTPUT_DIR (optional): directory to save the downloaded zip (default: current dir)
 - GHIDRA_REPO (optional): GitHub repo to query (default: NationalSecurityAgency/ghidra)
 """
-import os
-import sys
+import requests
 import logging
-from typing import Optional, List, Dict, Any
+import sys
+import os
 
-try:
-    import requests
-except Exception:
-    sys.stderr.write("requests is required. Install it with: pip install requests\n")
-    sys.exit(1)
+from typing import Optional, List, Dict, Any
 
 
 def get_releases(session: requests.Session, repo: str) -> List[Dict[str, Any]]:

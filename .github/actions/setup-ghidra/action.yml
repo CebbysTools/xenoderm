@@ -60,7 +60,7 @@ runs:
     - name: Resolve Ghidra version and install path
       id: resolve
       shell: bash
-      run: python ghidra_download.py
+      run: python ${{ github.action_path }}/ghidra_download.py
       # env:
       #   INPUT_VERSION: ${{ inputs.version }}
       #   INPUT_INSTALL_PATH: ${{ inputs.install-path }}

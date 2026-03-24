@@ -14,7 +14,7 @@ inputs:
     description: >
       Directory where Ghidra will be installed.
       Defaults to {RUNNER_TOOL_CACHE}/ghidra/{version}.
-    default: "./tools/ghidra"
+    default: "./.tools/ghidra"
 
 outputs:
   ghidra-home:

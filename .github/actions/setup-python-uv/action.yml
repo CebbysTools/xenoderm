@@ -2,6 +2,15 @@ name: "Setup Python UV"
 description: >
   Download and configure Python UV.
 
+outputs:
+  uv-path:
+    description: "Absolute path to the Python UV executable."
+    value: ${{ steps.setup-uv.outputs.uv-path }}
+
+  uvx-path:
+    description: "Absolute path to the Python UVX executable."
+    value: ${{ steps.setup-uv.outputs.uvx-path }}
+
 runs:
   using: "composite"
   steps:

@@ -9,10 +9,6 @@ inputs:
       Ghidra version to install (e.g. "11.1.2") or "latest" to resolve
       automatically via the GitHub Releases API.
     default: "latest"
-  python-version:
-    required: false
-    description: "Version of Python to use for internal scripts."
-    default: "3.14"
   install-path:
     required: false
     description: >
@@ -31,14 +27,9 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ inputs.python-version }}
-
     - name: Install Python requirements
       shell: bash
-      run: pip install -r ${{ github.action_path }}/requirements.txt
+      run: uv pip install -r ${{ github.action_path }}/requirements.txt
 
     - name: Resolve Ghidra version and install path
       id: resolve
@@ -47,4 +38,4 @@ runs:
         GHIDRA_VERSION: ${{ inputs.ghidra-version }}
         GITHUB_TOKEN: ${{ github.token }}
         GHIDRA_PATH: ${{ inputs.install-path }}
-      run: python scripts/setup/install-ghidra.py
+      run: uv python scripts/setup/install-ghidra.py

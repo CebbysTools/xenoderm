@@ -4,4 +4,14 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "ghidra-stubs==12.0.4",
+    "java-stubs-converted-strings",
+    "pyghidra==3.0.2",
+]
+
+[tool.uv]
+override-dependencies = ["jpype1==1.6.0"]
+
+[tool.pyright]
+reportMissingTypeStubs = false

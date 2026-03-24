@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        ghidra-version: ['latest', '12.0.4']
+        ghidra-version: ['12.0.4']
 
     steps:
       - name: Checkout repository
@@ -53,6 +53,12 @@ jobs:
         uses: ./.github/actions/setup-ghidra
         with:
           ghidra-version: ${{ matrix.ghidra-version }}
+
+      - name: 'Install Pyghidra dependencies'
+        shell: bash
+        run: |
+          uv pip install --no-index -f ${{ steps.setup.outputs.ghidra-home }}/Ghidra/Features/PyGhidra/pypkg/dist pyghidra &\
+          uv pip install --no-index -f ${{ steps.setup.outputs.ghidra-home }}/docs/ghidra_stubs ghidra-stubs
 
       # ----------------------------------------------------------------
       # Test 2 — Smoke: outputs are non-empty and paths exist

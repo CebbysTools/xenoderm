@@ -28,7 +28,7 @@ concurrency:
 # ---------------------------------------------------------------------------
 jobs:
   test-setup-ghidra:
-    name: '[${{ matrix.os }}/Ghidra ${{ matrix.ghidra-version }}] Action Smoketests and Functional Tests'
+    name: '[${{ matrix.os }}/${{ matrix.ghidra-version }}] Action Smoketests and Functional Tests'
     if: >
       github.event.inputs.action == '' ||
       github.event.inputs.action == 'setup-ghidra'
@@ -47,6 +47,12 @@ jobs:
       - name: 'Setup Python UV'
         id: setup-uv
         uses: ./.github/actions/setup-python-uv
+
+      - name: 'Setup Java'
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'corretto'
+          java-version: '21'
 
       - name: 'Setup Ghidra ${{ matrix.ghidra-version }}'
         id: setup

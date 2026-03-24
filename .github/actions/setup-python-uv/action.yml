@@ -1,0 +1,14 @@
+name: "Setup Python UV"
+description: >
+  Download and configure Python UV.
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python UV
+      id: setup-uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Create Python UV virtual environment
+      shell: bash
+      run: uv sync

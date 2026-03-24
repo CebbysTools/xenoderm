@@ -47,4 +47,4 @@ runs:
         GHIDRA_VERSION: ${{ inputs.ghidra-version }}
         GITHUB_TOKEN: ${{ github.token }}
         GHIDRA_PATH: ${{ inputs.install-path }}
-      run: python ${{ github.action_path }}/main.py
+      run: python scripts/setup/install-ghidra.py

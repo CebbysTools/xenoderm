@@ -44,6 +44,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Setup Python UV
+        uses: astral-sh/setup-uv@v7
+
+      - name: Create Python UV virtual environment
+        run: |
+          uv init &\
+          uv venv 
+
       - name: 'Setup Ghidra ${{ matrix.ghidra-version }}'
         id: setup
         uses: ./.github/actions/setup-ghidra

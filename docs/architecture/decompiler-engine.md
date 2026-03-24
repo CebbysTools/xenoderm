@@ -1,6 +1,6 @@
 # Decompiler Engine
 
-Modules: `xenoderm/decompiler/`, `xenoderm/emitter/`
+Modules: `sources/lv/cebbys/tools/xenoderm/decompiler/`, `sources/lv/cebbys/tools/xenoderm/emitter/`
 
 The decompiler converts the analysis-enriched P-code in the XDM model into a **pseudo-code AST**, which the emitter then renders as formatted, Python-like text. The decompiler is purely a translation step — it does not modify the XDM model and does not re-run analysis passes.
 
@@ -9,7 +9,7 @@ The decompiler converts the analysis-enriched P-code in the XDM model into a **p
 ## Module Layout
 
 ```
-xenoderm/decompiler/
+sources/lv/cebbys/tools/xenoderm/decompiler/
 ├── __init__.py
 ├── context.py        DecompileContext — per-function working state
 ├── varmap.py         Varnode → variable name resolution
@@ -18,7 +18,7 @@ xenoderm/decompiler/
 ├── cleanup.py        AST simplification and dead-assignment removal
 └── engine.py         Public entry point: decompile(binary, func_addr)
 
-xenoderm/emitter/
+sources/lv/cebbys/tools/xenoderm/emitter/
 ├── __init__.py
 ├── ast.py            All AST node dataclasses
 ├── python_emitter.py Renders AST to Python-like pseudo-code string
@@ -29,7 +29,7 @@ xenoderm/emitter/
 
 ## AST Node Types
 
-All AST nodes are frozen dataclasses in `xenoderm/emitter/ast.py`.
+All AST nodes are frozen dataclasses in `sources/lv/cebbys/tools/xenoderm/emitter/ast.py`.
 
 ### Expression nodes
 
@@ -242,7 +242,7 @@ class DecompileContext:
 
 ### Step 2 — Lifter
 
-`xenoderm/decompiler/lift.py` maps each P-code opcode to an AST fragment:
+`sources/lv/cebbys/tools/xenoderm/decompiler/lift.py` maps each P-code opcode to an AST fragment:
 
 | P-code op | AST produced |
 |-----------|-------------|
@@ -262,7 +262,7 @@ For `CONST` varnodes the lifter emits `ConstExpr`, annotating with type hints, s
 
 ### Step 3 — Structurer
 
-`xenoderm/decompiler/structurer.py` implements **structural analysis** (similar to Cifuentes' method) to convert the CFG into nested structured statements.
+`sources/lv/cebbys/tools/xenoderm/decompiler/structurer.py` implements **structural analysis** (similar to Cifuentes' method) to convert the CFG into nested structured statements.
 
 **Algorithm overview**:
 
@@ -279,7 +279,7 @@ The structurer produces a `Block` containing nested `Stmt` nodes.
 
 ### Step 4 — Cleanup
 
-`xenoderm/decompiler/cleanup.py` performs AST-level simplifications:
+`sources/lv/cebbys/tools/xenoderm/decompiler/cleanup.py` performs AST-level simplifications:
 
 - **Dead assignment removal**: assignments to variables never read again.
 - **Copy propagation**: `t0 = x; t1 = t0` → substitute `t0` with `x` where possible.
@@ -290,7 +290,7 @@ The structurer produces a `Block` containing nested `Stmt` nodes.
 
 ### Step 5 — Emitter
 
-`xenoderm/emitter/python_emitter.py` walks the `FunctionDecl` AST and produces a formatted string.
+`sources/lv/cebbys/tools/xenoderm/emitter/python_emitter.py` walks the `FunctionDecl` AST and produces a formatted string.
 
 ```python
 class PythonEmitter:
@@ -322,7 +322,7 @@ def Foo__Foo(this: Foo*) -> None:
 ## Public API
 
 ```python
-# xenoderm/decompiler/engine.py
+# sources/lv/cebbys/tools/xenoderm/decompiler/engine.py
 
 def decompile(binary: Binary, func_addr: int) -> FunctionDecl:
     """

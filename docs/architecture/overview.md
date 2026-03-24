@@ -82,17 +82,19 @@ Large binaries can contain hundreds of thousands of functions; Xenoderm therefor
 
 ## Component Summary
 
+All Python source lives under `sources/lv/cebbys/tools/xenoderm/` (base module: `lv.cebbys.tools.xenoderm`).
+
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
 | Ghidra Exporter | `ghidra/xenoderm_export.py` | Manifest export + on-demand shard export by address range |
-| Manifest Loader | `xenoderm/loader/manifest.py` | Deserialises `.xdm` manifest (no P-code) into Binary skeleton |
-| Batch Loader | `xenoderm/loader/batch.py` | Requests and merges `.xds` shards into the live Binary model |
-| XDM Model | `xenoderm/model/` | In-memory representation of all loaded data |
-| Analysis Pipeline | `xenoderm/analysis/` | Transforms and enriches a loaded batch |
-| Decompiler Engine | `xenoderm/decompiler/` | Converts enriched P-code into pseudo-code AST |
-| Pseudo-code Emitter | `xenoderm/emitter/` | Renders the AST as formatted Python-like text |
-| UI | `xenoderm/ui/` | PySide6 widgets for browsing and editing |
-| Persistence | `xenoderm/persistence.py` | Saves/loads user annotations back into `.xdm` |
+| Manifest Loader | `sources/lv/cebbys/tools/xenoderm/loader/manifest.py` | Deserialises `.xdm` manifest (no P-code) into Binary skeleton |
+| Batch Loader | `sources/lv/cebbys/tools/xenoderm/loader/batch.py` | Requests and merges `.xds` shards into the live Binary model |
+| XDM Model | `sources/lv/cebbys/tools/xenoderm/model/` | In-memory representation of all loaded data |
+| Analysis Pipeline | `sources/lv/cebbys/tools/xenoderm/analysis/` | Transforms and enriches a loaded batch |
+| Decompiler Engine | `sources/lv/cebbys/tools/xenoderm/decompiler/` | Converts enriched P-code into pseudo-code AST |
+| Pseudo-code Emitter | `sources/lv/cebbys/tools/xenoderm/emitter/` | Renders the AST as formatted Python-like text |
+| UI | `sources/lv/cebbys/tools/xenoderm/ui/` | PySide6 widgets for browsing and editing |
+| Persistence | `sources/lv/cebbys/tools/xenoderm/persistence.py` | Saves/loads user annotations back into `.xdm` |
 
 ---
 
@@ -112,7 +114,7 @@ The Ghidra script exports a manifest `.xdm` file in seconds, regardless of binar
 
 ### Phase 2 — Manifest Load (Xenoderm)
 
-`xenoderm/loader/manifest.py` deserialises the `.xdm` manifest into a `Binary` model with fully-populated metadata and an empty `functions[addr].blocks = {}` skeleton for every function. The UI can render the function list immediately.
+`sources/lv/cebbys/tools/xenoderm/loader/manifest.py` deserialises the `.xdm` manifest into a `Binary` model with fully-populated metadata and an empty `functions[addr].blocks = {}` skeleton for every function. The UI can render the function list immediately.
 
 ### Phase 3 — On-Demand Shard Load (batch)
 

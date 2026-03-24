@@ -1,6 +1,6 @@
 # P-code Internal Representation (XDM Model)
 
-Module: `xenoderm/model/`
+Module: `sources/lv/cebbys/tools/xenoderm/model/`
 
 This document describes the in-memory data model that Xenoderm builds after importing a `.xdm` file. All downstream components (analysis passes, decompiler, UI) work exclusively against this model.
 
@@ -9,7 +9,7 @@ This document describes the in-memory data model that Xenoderm builds after impo
 ## Module Layout
 
 ```
-xenoderm/model/
+sources/lv/cebbys/tools/xenoderm/model/
 ├── __init__.py
 ├── binary.py       Binary, Segment
 ├── symbol.py       Symbol, SymbolKind

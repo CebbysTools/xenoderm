@@ -20,7 +20,7 @@ $GHIDRA_HOME/support/analyzeHeadless \
     -postScript xenoderm_export.py \
         --mode manifest \
         --out /output/project.xdm \
-    -scriptPath /path/to/xenoderm/ghidra
+    -scriptPath /path/to/ghidra
 ```
 
 This runs Ghidra's full auto-analysis and then exports the manifest. The output file is typically a few megabytes even for very large binaries because it contains no P-code.
@@ -36,7 +36,7 @@ $GHIDRA_HOME/support/analyzeHeadless \
         --out /output/project.xdm.shards/0x400000-0x410000.xds \
         --range-start 0x400000 \
         --range-end   0x410000 \
-    -scriptPath /path/to/xenoderm/ghidra \
+    -scriptPath /path/to/ghidra \
     -noanalysis
 ```
 
@@ -71,13 +71,13 @@ xenoderm_export.py
 │   └── write_xdm(out_path, data)
 │
 ├── run_shard_export(out_path, range_start, range_end)
-│   ├── collect_functions_in_range(range_start, range_end)
-│   │   └── for each Function whose entry is in [range_start, range_end):
-│   │       ├── collect_basic_blocks()
-│   │       │   └── for each CodeBlock:
-│   │       │       └── collect_pcode_ops()
-│   │       └── collect_calling_convention()
-│   └── write_xds(out_path, range_start, range_end, functions)
+│   ├── collect_instructions_in_range(range_start, range_end)
+│   │   └── for each Instruction whose address is in [range_start, range_end):
+│   │       ├── collect address-space (min/max)
+│   │       ├── collect bytecode
+│   │       ├── collect native mnemonic + operands
+│   │       └── collect_pcode_ops()
+│   └── write_xds(out_path, instructions)
 │
 └── helpers
     ├── varnode_to_dict(vn)
@@ -219,61 +219,190 @@ No `blocks` key is present. This keeps the manifest small — each function entr
 
 ---
 
-### Shard `.xds`
+### Shard `.xds` — V1 Export Format
 
-A shard contains only the P-code for functions in the requested range.
+A shard is a **JSON array** of instruction objects. Each element corresponds to exactly one native machine instruction and carries its P-code expansion.
 
 ```json
-{
-  "version": 1,
-  "binary_sha256": "abc123...",
-  "range": { "start": "0x400000", "end": "0x410000" },
-  "functions": [
-    {
-      "addr": "0x401234",
-      "blocks": [
-        {
-          "start": "0x401234",
-          "end":   "0x401260",
-          "ops": [
-            {
-              "seq":    0,
-              "addr":   "0x401234",
-              "opcode": "COPY",
-              "inputs": [
-                { "space": "register", "offset": "0x8", "size": 8 }
-              ],
-              "output": { "space": "unique", "offset": "0x1000", "size": 8 }
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
+[
+  {
+    "address-space": { "min": "005f4f50", "max": "005f4f50" },
+    "bytecode": "55",
+    "mnemonics": {
+      "mnemonic": "PUSH",
+      "operands": ["EBP"]
+    },
+    "pcode": [
+      {
+        "mnemonic": "COPY",
+        "inputs": [
+          { "name": "register", "space": 548, "offset": 20, "size": 4 }
+        ],
+        "output": { "name": "unique", "space": 291, "offset": 267520, "size": 4 }
+      },
+      {
+        "mnemonic": "INT_SUB",
+        "inputs": [
+          { "name": "register", "space": 548, "offset": 16, "size": 4 },
+          { "name": "const",    "space": 48,  "offset": 4,  "size": 4 }
+        ],
+        "output": { "name": "register", "space": 548, "offset": 16, "size": 4 }
+      },
+      {
+        "mnemonic": "STORE",
+        "inputs": [
+          { "name": "const",    "space": 48,  "offset": 417,    "size": 8 },
+          { "name": "register", "space": 548, "offset": 16,     "size": 4 },
+          { "name": "unique",   "space": 291, "offset": 267520, "size": 4 }
+        ]
+      }
+    ]
+  }
+]
 ```
 
-`binary_sha256` is included in the shard so `ShardLoader` can detect stale shards when the binary is re-imported.
+The array is ordered by address — instructions appear in ascending `address-space.min` order within the exported range.
 
-#### P-code op fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `seq` | int | Sequence number within the block |
-| `addr` | string (hex) | Machine address this op was lifted from |
-| `opcode` | string | Ghidra `PcodeOp` mnemonic |
-| `inputs` | list[varnode] | Input varnodes |
-| `output` | varnode \| null | Output varnode (null for side-effect-only ops) |
-
-#### Varnode fields
+#### Instruction object fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `space` | string | Address space: `register`, `ram`, `unique`, `const`, `stack` |
-| `offset` | string (hex) | Offset within the space |
-| `size` | int | Byte width |
+| `address-space.min` | hex string (no `0x` prefix) | Start address of the instruction |
+| `address-space.max` | hex string (no `0x` prefix) | Address of the last byte of the instruction (inclusive) |
+| `bytecode` | space-separated hex string | Raw encoding bytes |
+| `mnemonics.mnemonic` | string | Native assembly mnemonic (`PUSH`, `MOV`, `CALL`, …) |
+| `mnemonics.operands` | string[] | Native operand strings as Ghidra would display them |
+| `pcode` | array | Ordered list of P-code operations produced by lifting this instruction |
 
-`const` space varnodes carry their value in `offset`.
+#### P-code operation object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mnemonic` | string | Ghidra P-code opcode name (e.g. `COPY`, `INT_ADD`, `STORE`) |
+| `inputs` | varnode[] | Input varnodes, in operand order |
+| `output` | varnode \| absent | Output varnode; the key is **absent entirely** (not `null`) for void ops such as `STORE`, `CALL`, `BRANCH`, `CBRANCH`, `RETURN` |
+
+#### Varnode object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Address space name: `"register"`, `"const"`, `"unique"`, `"ram"` |
+| `space` | integer | Ghidra-internal numeric space ID (see table below) |
+| `offset` | integer | Offset within the space. For `const` varnodes this **is** the literal value |
+| `size` | integer | Width in bytes |
+
+#### Address space IDs (x86/x86-64, Ghidra defaults)
+
+| `name` | `space` ID | Meaning |
+|--------|-----------|---------|
+| `register` | 548 | CPU register file; `offset` is the register's byte offset within the file |
+| `const` | 48 | Immediate / literal value stored directly in `offset` |
+| `unique` | 291 | Per-instruction temporaries; `offset` is a unique token within the instruction |
+| `ram` | 417 | Main memory; `offset` is an absolute virtual address |
+
+> **Note:** Space IDs are Ghidra-internal integers that may differ across architectures and Ghidra versions. The importer uses the `name` field as the canonical space discriminator and treats `space` as informational only.
+
+#### Special-case semantics for selected opcodes
+
+| Mnemonic | inputs | output | Notes |
+|----------|--------|--------|-------|
+| `STORE` | `[space_sel, addr, value]` | absent | `space_sel` is a `const` varnode whose `offset` equals the target space ID (e.g. 417 for `ram`) |
+| `LOAD` | `[space_sel, addr]` | varnode | Same `space_sel` convention as `STORE` |
+| `CALL` | `[target]` | absent | `target` is a `ram` varnode; `offset` is the callee's absolute address |
+| `CALLIND` | `[target]` | absent | `target` is a computed varnode (`unique` or `register`) |
+| `BRANCH` | `[target]` | absent | Unconditional; `target` is a `ram` varnode |
+| `CBRANCH` | `[target, cond]` | absent | `cond` is a 1-byte boolean varnode; branch taken when `cond != 0` |
+| `RETURN` | `[ret_addr]` | absent | `ret_addr` is typically a `register` varnode holding the popped return address |
+
+---
+
+## Importing V1 Shards
+
+Module: `sources/lv/cebbys/tools/xenoderm/loader/shard.py`
+
+The `ShardLoader` parses a V1 `.xds` array and merges the result into the live `Binary` model. The steps are:
+
+### 1 — Parse addresses
+
+Both `address-space.min` and `address-space.max` are plain hex strings **without** a `0x` prefix:
+
+```python
+min_addr = int(entry["address-space"]["min"], 16)
+max_addr = int(entry["address-space"]["max"], 16)
+```
+
+### 2 — Map varnodes
+
+Varnodes are constructed from the `name` field, ignoring the numeric `space` ID:
+
+```python
+_SPACE_MAP = {
+    "register": AddrSpace.REGISTER,
+    "const":    AddrSpace.CONST,
+    "unique":   AddrSpace.UNIQUE,
+    "ram":      AddrSpace.RAM,
+}
+
+def parse_varnode(v: dict) -> Varnode:
+    return Varnode(
+        space=_SPACE_MAP[v["name"]],
+        offset=v["offset"],
+        size=v["size"],
+    )
+```
+
+### 3 — Parse P-code ops
+
+```python
+def parse_pcode_op(seq: int, insn_addr: int, op: dict) -> PcodeOp:
+    return PcodeOp(
+        seq=seq,
+        addr=insn_addr,
+        opcode=op["mnemonic"],
+        inputs=[parse_varnode(v) for v in op["inputs"]],
+        output=parse_varnode(op["output"]) if "output" in op else None,
+    )
+```
+
+### 4 — Assign instructions to functions
+
+The V1 format is a **flat instruction list** — it carries no function or block boundaries. The importer uses the manifest's function index to assign each instruction to the function that contains its address:
+
+```python
+# Build a sorted list of (entry_addr, end_addr) from the manifest
+func_ranges = sorted(
+    (fn.addr, fn.addr + fn.size) for fn in binary.functions.values()
+)
+
+def find_function(insn_addr: int) -> int | None:
+    """Return the entry address of the function containing insn_addr."""
+    for entry, end in func_ranges:
+        if entry <= insn_addr < end:
+            return entry
+    return None
+```
+
+Instructions that fall outside any known function range are collected into a synthetic `__unassigned__` bucket for manual review.
+
+### 5 — Basic block splitting
+
+The V1 shard does **not** include explicit basic block boundaries. After all instructions are assigned to functions, the `BlockSplitPass` analysis pass is responsible for splitting the flat instruction list into `BasicBlock` objects by detecting control-flow ops (`BRANCH`, `CBRANCH`, `CALL`, `CALLIND`, `RETURN`) and their targets.
+
+This is intentional: keeping block structure out of the export format means the exporter stays simple and the importer can apply richer splitting heuristics without coupling them to the Ghidra script.
+
+### 6 — Full import pipeline
+
+```python
+from lv.cebbys.tools.xenoderm.loader.shard import ShardLoader
+from lv.cebbys.tools.xenoderm.analysis.runner import AnalysisRunner
+import json
+from pathlib import Path
+
+raw = json.loads(Path("shard.xds").read_bytes())
+loader = ShardLoader(binary)
+new_func_addrs = loader.load_v1(raw)       # parses + assigns to functions
+AnalysisRunner(binary).run_for(new_func_addrs)  # block-split + reorder + …
+```
 
 ---
 
@@ -304,65 +433,79 @@ while i < len(args):
         i += 1
 ```
 
-### Function range filtering (shard mode)
+### Instruction iteration (shard mode)
 
 ```python
-def collect_functions_in_range(range_start, range_end):
+def collect_instructions_in_range(range_start, range_end):
     listing = currentProgram.getListing()
+    addr_factory = currentProgram.getAddressFactory()
+    start_addr = addr_factory.getDefaultAddressSpace().getAddress(range_start)
+    end_addr   = addr_factory.getDefaultAddressSpace().getAddress(range_end - 1)
+    addr_set   = addr_factory.getAddressSet(start_addr, end_addr)
+
     results = []
-    func_iter = listing.getFunctions(True)
-    while func_iter.hasNext():
-        func = func_iter.next()
-        entry = func.getEntryPoint().getOffset()
-        if range_start <= entry < range_end:
-            results.append(collect_function_pcode(func))
+    inst_iter = listing.getInstructions(addr_set, True)
+    while inst_iter.hasNext():
+        inst = inst_iter.next()
+        results.append(instruction_to_dict(inst))
     return results
 ```
 
-### P-code retrieval
+### P-code retrieval per instruction
 
 ```python
-def collect_function_pcode(func):
-    listing = currentProgram.getListing()
-    body = func.getBody()
-    block_model = currentProgram.getBasicBlockModel()
-    biter = block_model.getCodeBlocksContaining(body, monitor)
-    blocks = []
-    while biter.hasNext():
-        block = biter.next()
-        addr_set = block.intersect(body)
-        ops = []
-        seq = 0
-        inst_iter = listing.getInstructions(addr_set, True)
-        while inst_iter.hasNext():
-            inst = inst_iter.next()
-            for op in inst.getPcode():
-                ops.append({
-                    "seq":    seq,
-                    "addr":   "0x%x" % inst.getAddress().getOffset(),
-                    "opcode": op.getMnemonic(),
-                    "inputs": [varnode_to_dict(op.getInput(i))
-                               for i in range(op.getNumInputs())],
-                    "output": varnode_to_dict(op.getOutput()) if op.getOutput() else None
-                })
-                seq += 1
-        start = block.getMinAddress().getOffset()
-        end   = block.getMaxAddress().getOffset() + 1
-        blocks.append({"start": "0x%x" % start, "end": "0x%x" % end, "ops": ops})
+def instruction_to_dict(inst):
+    min_addr = inst.getMinAddress().getOffset()
+    max_addr = inst.getMaxAddress().getOffset()
+
+    pcode_ops = []
+    for op in inst.getPcode():
+        entry = {
+            "mnemonic": op.getMnemonic(),
+            "inputs": [varnode_to_dict(op.getInput(i))
+                       for i in range(op.getNumInputs())],
+        }
+        if op.getOutput() is not None:
+            entry["output"] = varnode_to_dict(op.getOutput())
+        pcode_ops.append(entry)
+
     return {
-        "addr":   "0x%x" % func.getEntryPoint().getOffset(),
-        "blocks": blocks
+        "address-space": {
+            "min": "%x" % min_addr,
+            "max": "%x" % max_addr,
+        },
+        "bytecode": " ".join("%02x" % (ord(b) if isinstance(b, str) else b)
+                             for b in inst.getBytes()),
+        "mnemonics": {
+            "mnemonic": inst.getMnemonicString(),
+            "operands": [inst.getDefaultOperandRepresentation(i)
+                         for i in range(inst.getNumOperands())],
+        },
+        "pcode": pcode_ops,
     }
 ```
 
-For **high P-code**, replace the inner loop with `DecompInterface.decompileFunction()` and walk `HighFunction.getPcodeOps()`. Xenoderm exports **raw P-code** by default.
+### Varnode serialisation
+
+```python
+def varnode_to_dict(vn):
+    return {
+        "name":   vn.getAddress().getAddressSpace().getName(),
+        "space":  vn.getAddress().getAddressSpace().getSpaceID(),
+        "offset": vn.getAddress().getOffset(),
+        "size":   vn.getSize(),
+    }
+```
+
+The `name` field is the canonical discriminator used by the importer. `space` is included for debugging but is not relied upon during import.
 
 ### Jython / Ghidra API constraints
 
 - Jython 2.7 — no f-strings, no walrus operator, use `json` not `orjson`.
-- Use `gzip.open` for writing; Jython's `gzip` module works.
+- Use `gzip.open` for writing compressed shards; Jython's `gzip` module works.
 - Ghidra API objects are Java types; always call `.toString()` or cast before storing.
 - `monitor.checkCanceled()` must be called in inner loops to allow graceful cancellation from the Ghidra UI.
+- `inst.getBytes()` returns a Java `byte[]`; each element may be a signed Java byte — mask with `& 0xFF` or use `ord()` depending on Jython version.
 
 ### Demangling
 
@@ -380,6 +523,6 @@ def demangle(raw_name):
 ### Performance
 
 - **Manifest export** is fast because it iterates function metadata, not instructions.
-- **Shard export** for a 64 KiB address window typically contains 50–500 functions and completes in 1–10 seconds.
+- **Shard export** for a 64 KiB address window typically covers 50–500 instructions and completes in 1–10 seconds.
 - Use `-noanalysis` for all shard exports — analysis was already done during manifest export.
-- Stream-write JSON arrays rather than building the full dict in memory for large ranges.
+- Stream-write the JSON array rather than building the full list in memory for large ranges.

@@ -1,6 +1,6 @@
 # Batch / Lazy Loading
 
-Module: `xenoderm/loader/`
+Module: `sources/lv/cebbys/tools/xenoderm/loader/`
 
 This document describes how Xenoderm avoids loading P-code for an entire binary at once. The core idea is a **manifest + shard** split: the manifest is exported once and loaded immediately; P-code shards are fetched on demand, function-by-function or range-by-range, and cached so the Ghidra exporter is only invoked once per range.
 
@@ -9,7 +9,7 @@ This document describes how Xenoderm avoids loading P-code for an entire binary 
 ## Module Layout
 
 ```
-xenoderm/loader/
+sources/lv/cebbys/tools/xenoderm/loader/
 ├── __init__.py
 ├── manifest.py       ManifestLoader  — loads the .xdm manifest
 ├── batch.py          BatchLoader     — requests and merges shards
@@ -265,9 +265,9 @@ Stale shards are deleted and re-exported on next access. A full cache clear can 
 In headless mode (no UI), callers can drive loading explicitly:
 
 ```python
-from xenoderm.loader import ManifestLoader, BatchLoader
-from xenoderm.loader.ghidra_bridge import GhidraBridge
-from xenoderm.decompiler import decompile_to_text
+from lv.cebbys.tools.xenoderm.loader import ManifestLoader, BatchLoader
+from lv.cebbys.tools.xenoderm.loader.ghidra_bridge import GhidraBridge
+from lv.cebbys.tools.xenoderm.decompiler import decompile_to_text
 
 binary = ManifestLoader().load(Path("project.xdm"))
 bridge = GhidraBridge(ghidra_home=..., ...)

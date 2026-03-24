@@ -1,6 +1,6 @@
 # UI Design
 
-Module: `xenoderm/ui/`
+Module: `sources/lv/cebbys/tools/xenoderm/ui/`
 
 Xenoderm's UI is built with **PySide6** (Qt6) using a dockable multi-panel layout inspired by JADX and Enigma. All panels observe the shared `Binary` model via a central signal bus; user edits flow back to the model through command objects that support undo/redo.
 
@@ -11,7 +11,7 @@ The centrepiece is the **Layer View** — a vertically-stacked display of all si
 ## Module Layout
 
 ```
-xenoderm/ui/
+sources/lv/cebbys/tools/xenoderm/ui/
 ├── __init__.py
 ├── app.py                  QApplication bootstrap, main entry point
 ├── main_window.py          MainWindow (QMainWindow), dock layout
@@ -460,6 +460,6 @@ Tabs:
 
 ## Theming
 
-Xenoderm ships two Qt stylesheets: `xenoderm/ui/themes/dark.qss` and `light.qss`. The active stylesheet is applied at startup and changeable without restart.
+Xenoderm ships two Qt stylesheets: `sources/lv/cebbys/tools/xenoderm/ui/themes/dark.qss` and `light.qss`. The active stylesheet is applied at startup and changeable without restart.
 
-Layer-specific colour coding (chain highlights, rewrite highlights, patch markers) is defined in `xenoderm/ui/highlight.py` and adapts to the active theme automatically.
+Layer-specific colour coding (chain highlights, rewrite highlights, patch markers) is defined in `sources/lv/cebbys/tools/xenoderm/ui/highlight.py` and adapts to the active theme automatically.

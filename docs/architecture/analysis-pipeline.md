@@ -1,6 +1,6 @@
 # Analysis Pipeline
 
-Module: `xenoderm/analysis/`
+Module: `sources/lv/cebbys/tools/xenoderm/analysis/`
 
 The analysis pipeline is a chain of passes that transform raw P-code (as loaded from a `.xds` shard) into an enriched form ready for decompilation. Each pass reads from and writes back into the `Binary` model. Passes are independent Python classes registered through a simple registry and executed in dependency order.
 
@@ -11,7 +11,7 @@ Because Xenoderm uses batch loading, every pass runs on the **functions in the n
 ## Module Layout
 
 ```
-xenoderm/analysis/
+sources/lv/cebbys/tools/xenoderm/analysis/
 ├── __init__.py
 ├── registry.py          Pass registration and dependency resolver
 ├── runner.py            Executes passes in correct order
@@ -37,7 +37,7 @@ xenoderm/analysis/
 
 ```python
 from abc import ABC, abstractmethod
-from xenoderm.model import Binary
+from lv.cebbys.tools.xenoderm.model import Binary
 
 class AnalysisPass(ABC):
     # Unique string ID for this pass
@@ -62,7 +62,7 @@ class AnalysisPass(ABC):
 ## Pass Registry
 
 ```python
-# xenoderm/analysis/registry.py
+# sources/lv/cebbys/tools/xenoderm/analysis/registry.py
 
 _registry: dict[str, type[AnalysisPass]] = {}
 
@@ -92,7 +92,7 @@ class BlockSplitPass(AnalysisPass):
 ## Pass Runner
 
 ```python
-# xenoderm/analysis/runner.py
+# sources/lv/cebbys/tools/xenoderm/analysis/runner.py
 
 class AnalysisRunner:
     def __init__(self, binary: Binary, enabled: set[str] | None = None):
@@ -437,7 +437,7 @@ Both `InsnReorderPass` and `OffsetRecalcPass` write back their pre-transform sta
 
 ## Adding a Custom Pass
 
-1. Create a file in `xenoderm/analysis/` or a plugin package.
+1. Create a file in `sources/lv/cebbys/tools/xenoderm/analysis/` or a plugin package.
 2. Subclass `AnalysisPass`, set `name`, `depends_on`, and `required`.
 3. Decorate with `@register`.
 4. Install the plugin — the pass is discovered via `importlib.metadata` entry-points:

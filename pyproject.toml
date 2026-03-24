@@ -8,6 +8,7 @@ dependencies = [
     "ghidra-stubs==12.0.4",
     "java-stubs-converted-strings",
     "pyghidra==3.0.2",
+    "requests>=2.32.5",
 ]
 
 [tool.uv]

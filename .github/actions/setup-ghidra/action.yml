@@ -27,10 +27,6 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Install Python requirements
-      shell: bash
-      run: uv pip install -r ${{ github.action_path }}/requirements.txt
-
     - name: Resolve Ghidra version and install path
       id: resolve
       shell: bash
@@ -38,4 +34,4 @@ runs:
         GHIDRA_VERSION: ${{ inputs.ghidra-version }}
         GITHUB_TOKEN: ${{ github.token }}
         GHIDRA_PATH: ${{ inputs.install-path }}
-      run: uv python scripts/setup/install-ghidra.py
+      run: uv run scripts/setup/install-ghidra.py

@@ -1,0 +1,23 @@
+name: "Setup Python UV"
+description: >
+  Download and configure Python UV.
+
+outputs:
+  uv-path:
+    description: "Absolute path to the Python UV executable."
+    value: ${{ steps.setup-uv.outputs.uv-path }}
+
+  uvx-path:
+    description: "Absolute path to the Python UVX executable."
+    value: ${{ steps.setup-uv.outputs.uvx-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python UV
+      id: setup-uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Create Python UV virtual environment
+      shell: bash
+      run: uv sync

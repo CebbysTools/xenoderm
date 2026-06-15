@@ -1,0 +1,159 @@
+name: Test Custom Actions
+
+# Runs whenever a custom action or this workflow itself changes.
+# Each job tests exactly one custom action in isolation.
+on:
+  push:
+    paths:
+      - '.github/actions/**'
+      - '.github/workflows/test-actions.yml'
+  pull_request:
+    paths:
+      - '.github/actions/**'
+      - '.github/workflows/test-actions.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Which action to test (leave blank for all)'
+        required: false
+        default: ''
+
+# Cancel in-progress runs for the same branch/PR.
+concurrency:
+  group: test-actions-${{ github.ref }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# Job: test-setup-ghidra
+# ---------------------------------------------------------------------------
+jobs:
+  test-setup-ghidra:
+    name: '[${{ matrix.os }}/${{ matrix.ghidra-version }}] Action Smoketests and Functional Tests'
+    if: >
+      github.event.inputs.action == '' ||
+      github.event.inputs.action == 'setup-ghidra'
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        ghidra-version: ['12.0.4']
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'corretto'
+          java-version: '21'
+
+      - name: Setup Python UV
+        id: setup-uv
+        uses: ./.github/actions/setup-python-uv
+
+      - name: Setup Ghidra ${{ matrix.ghidra-version }}
+        id: setup
+        uses: ./.github/actions/setup-ghidra
+        with:
+          ghidra-version: ${{ matrix.ghidra-version }}
+
+      - name: Install Pyghidra dependencies
+        shell: bash
+        run: |
+          uv pip install --no-index -f ${{ steps.setup.outputs.ghidra-home }}/Ghidra/Features/PyGhidra/pypkg/dist pyghidra &\
+          uv pip install --no-index -f ${{ steps.setup.outputs.ghidra-home }}/docs/ghidra_stubs ghidra-stubs
+
+      # ----------------------------------------------------------------
+      # Test 2 — Smoke: outputs are non-empty and paths exist
+      # ----------------------------------------------------------------
+      - name: '[smoke] Outputs are set and non-empty'
+        shell: python
+        env:
+          OUT_GHIDRA_HOME: ${{ steps.setup.outputs.ghidra-home }}
+          OUT_VERSION:     ${{ steps.setup.outputs.ghidra-version }}
+        run: |
+          import os
+          import sys
+
+          failures = []
+          for var in ("OUT_GHIDRA_HOME", "OUT_VERSION"):
+              val = os.environ.get(var, "")
+              if not val:
+                  failures.append(f"Output '{var}' is empty")
+              else:
+                  print(f"{var} = {val}")
+
+          if failures:
+              for msg in failures:
+                  print(f"::error::{msg}", file=sys.stderr)
+              sys.exit(1)
+
+      - name: '[smoke] GHIDRA_HOME directory exists'
+        shell: python
+        env:
+          GHIDRA_HOME: ${{ steps.setup.outputs.ghidra-home }}
+        run: |
+          import os
+          import sys
+          from pathlib import Path
+
+          home = Path(os.environ["GHIDRA_HOME"])
+          if not home.is_dir():
+              print(f"::error::GHIDRA_HOME directory not found: {home}", file=sys.stderr)
+              sys.exit(1)
+          print(f"GHIDRA_HOME exists: {home}")
+
+      - name: 'Run PyGhidra headless script (non-Windows)'
+        if: matrix.os != 'windows-latest'
+        run: |
+          python run_pyghidra_headless_noargs.py
+
+      - name: 'Run PyGhidra headless script (Windows)'
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          python .\\run_pyghidra_headless_noargs.py
+
+
+  # ---------------------------------------------------------------------------
+  # Job: summary — collects all test results and reports
+  # ---------------------------------------------------------------------------
+  summary:
+    name: 'Test summary'
+    needs: [test-setup-ghidra]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report results
+        shell: python
+        env:
+          RESULT_SETUP_GHIDRA: ${{ needs.test-setup-ghidra.result }}
+        run: |
+          import os
+          import sys
+
+          results = {
+              "setup-ghidra": os.environ["RESULT_SETUP_GHIDRA"],
+          }
+
+          header = f"{'Action':<25} {'Result':<10}"
+          sep    = "-" * len(header)
+          print(header)
+          print(sep)
+          for action, result in results.items():
+              icon = "✓" if result == "success" else "✗"
+              print(f"{action:<25} {icon} {result}")
+          print(sep)
+
+          failed = [a for a, r in results.items() if r == "failure"]
+          if failed:
+              print(
+                  f"\n::error::Failed actions: {', '.join(failed)}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print("\nAll action tests passed.")

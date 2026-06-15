@@ -1,0 +1,6 @@
+.github/output.env
+.tools/**
+.venv/**
+.project/**
+
+**/__pycache__/**

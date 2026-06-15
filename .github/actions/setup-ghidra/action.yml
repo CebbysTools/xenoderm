@@ -1,0 +1,37 @@
+name: "Setup Ghidra"
+description: >
+  Download and configure Ghidra + the required JDK.
+
+inputs:
+  ghidra-version:
+    required: false
+    description: >
+      Ghidra version to install (e.g. "11.1.2") or "latest" to resolve
+      automatically via the GitHub Releases API.
+    default: "latest"
+  install-path:
+    required: false
+    description: >
+      Directory where Ghidra will be installed.
+      Defaults to {RUNNER_TOOL_CACHE}/ghidra/{version}.
+    default: "./.tools/ghidra"
+
+outputs:
+  ghidra-home:
+    description: "Absolute path to the Ghidra installation directory."
+    value: ${{ steps.resolve.outputs.ghidra-home }}
+  ghidra-version:
+    description: 'Resolved Ghidra version string, e.g. "11.1.2".'
+    value: ${{ steps.resolve.outputs.ghidra-version }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve Ghidra version and install path
+      id: resolve
+      shell: bash
+      env:
+        GHIDRA_VERSION: ${{ inputs.ghidra-version }}
+        GITHUB_TOKEN: ${{ github.token }}
+        GHIDRA_PATH: ${{ inputs.install-path }}
+      run: uv run scripts/setup/install-ghidra.py

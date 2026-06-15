@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Setup Ghidra",
+      "type": "shell",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "env": {
+          "GHIDRA_VERSION": "latest",
+          "GHIDRA_PATH": "${workspaceFolder}/.tools/ghidra",
+          "GITHUB_OUTPUT": "${workspaceFolder}/.github/output.env"
+        }
+      },
+      "command": "python \"${workspaceFolder}/scripts/setup/install-ghidra.py\" && uv pip install --no-index -f \"${workspaceFolder}/.tools/ghidra/Ghidra/Features/PyGhidra/pypkg/dist\" pyghidra && uv pip install --no-index -f \"${workspaceFolder}/.tools/ghidra/docs/ghidra_stubs\" ghidra-stubs",
+      "problemMatcher": []
+    }
+  ]
+}
